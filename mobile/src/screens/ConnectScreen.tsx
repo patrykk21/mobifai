@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,30 @@ type ConnectScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Connect'>;
 };
 
+// Default relay server URL for development (Mac's local IP)
+const DEFAULT_RELAY_SERVER_URL = 'http://192.168.1.7:3000';
+
 export default function ConnectScreen({ navigation }: ConnectScreenProps) {
-  const [relayServerUrl, setRelayServerUrl] = useState('');
+  const [relayServerUrl, setRelayServerUrl] = useState(DEFAULT_RELAY_SERVER_URL);
   const [pairingCode, setPairingCode] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Load saved relay server URL from AsyncStorage
+    const loadSavedUrl = async () => {
+      try {
+        const savedUrl = await AsyncStorage.getItem('relayServerUrl');
+        if (savedUrl) {
+          setRelayServerUrl(savedUrl);
+        }
+      } catch (error) {
+        // If no saved URL, use default
+        console.log('No saved relay server URL, using default');
+      }
+    };
+
+    loadSavedUrl();
+  }, []);
 
   const handleConnect = async () => {
     if (!relayServerUrl || !pairingCode) {

@@ -3,6 +3,7 @@ import * as pty from 'node-pty';
 import os from 'os';
 import dotenv from 'dotenv';
 import chalk from 'chalk';
+import stripAnsi from 'strip-ansi';
 
 dotenv.config();
 
@@ -107,9 +108,12 @@ function startTerminal() {
   });
 
   // Send terminal output to mobile device via relay
+  // Strip ANSI escape codes for better display on mobile
   terminal.onData((data) => {
     if (socket.connected) {
-      socket.emit('terminal:output', data);
+      // Strip ANSI escape codes (colors, formatting, etc.) for cleaner output
+      const cleanData = stripAnsi(data);
+      socket.emit('terminal:output', cleanData);
     }
   });
 
