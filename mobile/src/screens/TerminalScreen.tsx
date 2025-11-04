@@ -16,6 +16,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
 import { io, Socket } from 'socket.io-client';
+import { parseAnsiToText } from '../utils/ansiParser';
 
 type TerminalScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Terminal'>;
@@ -32,6 +33,8 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const socketRef = useRef<Socket | null>(null);
   const previousInputRef = useRef<string>('');
   const outputBufferRef = useRef<string[]>([]); // Line-based buffer for terminal output
+  const lastSentInputRef = useRef<string>(''); // Track what we last sent to detect terminal echo
+  const backspaceSentRef = useRef<boolean>(false); // Track if we've already sent a backspace via onKeyPress
 
   // Function to calculate and send terminal dimensions
   const calculateAndSendDimensions = () => {
@@ -47,7 +50,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     const cols = Math.floor(terminalWidth / charWidth);
     const rows = Math.floor(terminalHeight / charHeight);
     
-    console.log(`Terminal dimensions: ${cols}x${rows} (screen: ${screenWidth}x${screenHeight}, ${isLandscape ? 'landscape' : 'portrait'})`);
     
     // Send dimensions if socket is connected and paired
     if (socketRef.current && paired) {
@@ -62,7 +64,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     
     // Listen for orientation/dimension changes
     const subscription = Dimensions.addEventListener('change', () => {
-      console.log('Orientation/dimensions changed');
       // Wait a bit for dimensions to update
       setTimeout(() => {
         calculateAndSendDimensions();
@@ -131,43 +132,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     });
 
     socket.on('terminal:output', (data: string) => {
-      // Log raw data for debugging (especially \r sequences)
-      const hasCarriageReturn = data.includes('\r');
-      const hasNewline = data.includes('\n');
-      const hasBoxDrawing = /[┌┐└┘│─┬┴├┤]/.test(data);
-      
-      if (hasCarriageReturn || hasBoxDrawing) {
-        // Log control characters and their positions
-        const crCount = (data.match(/\r/g) || []).length;
-        const nlCount = (data.match(/\n/g) || []).length;
-        const crPositions = [];
-        for (let i = 0; i < data.length; i++) {
-          if (data[i] === '\r') crPositions.push(i);
-        }
-        
-        console.log(`[TERMINAL] Raw data chunk:`, {
-          length: data.length,
-          crCount,
-          nlCount,
-          crPositions: crPositions.slice(0, 10), // First 10 positions
-          hasBoxDrawing,
-          preview: data.substring(0, 100).replace(/[\r\n]/g, m => m === '\r' ? '\\r' : '\\n')
-        });
-        
-        // Show context around \r sequences
-        if (crCount > 0) {
-          const sampleIndices = crPositions.slice(0, 3);
-          sampleIndices.forEach(idx => {
-            const start = Math.max(0, idx - 20);
-            const end = Math.min(data.length, idx + 20);
-            const context = data.substring(start, end)
-              .replace(/\r/g, '\\r')
-              .replace(/\n/g, '\\n')
-              .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '[ANSI]');
-            console.log(`[TERMINAL] Context around \\r at ${idx}: "${context}"`);
-          });
-        }
-      }
       
       // Handle clear screen - clear everything
       if (data.includes('\x1b[2J')) {
@@ -199,9 +163,17 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       const hasMoveUp = moveUpCount > 0;
       const hasMoveToColumn0 = data.includes('\x1b[G');
       
-      // Remove ANSI escape sequences (colors, formatting, cursor positioning)
-      // But we've already extracted the cursor movement info above
-      let processedData = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      // Remove ANSI control sequences (cursor positioning, screen clearing) but KEEP color codes
+      // Color codes end in 'm' (SGR - Select Graphic Rendition)
+      // Control sequences: cursor movement (H, A, B, C, D, G), screen clearing (J, K), etc.
+      // We want to keep colors (ending in 'm') but remove control sequences
+      let processedData = data
+        // Remove cursor positioning and screen control sequences (but keep colors ending in 'm')
+        .replace(/\x1b\[[0-9;]*[HJABCDG]/g, '') // Cursor positioning
+        .replace(/\x1b\[[0-9;]*[JK]/g, '') // Screen clearing (J, K)
+        .replace(/\x1b\[[?0-9]*[hl]/g, '') // Cursor visibility
+        // Keep color codes (ending in 'm') - these will be rendered with colors
+        // Color codes are already in the data, we just need to not strip them
       
       // If we have move up sequences, we're replacing lines from the end
       // Calculate how many lines back we should start replacing
@@ -209,6 +181,90 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       if (hasMoveUp && buffer.length > 0) {
         // Move up means we're going back to overwrite previous lines
         startReplaceIndex = Math.max(0, buffer.length - moveUpCount);
+      }
+      
+      // Process backspaces - handle \b to remove characters
+      // Terminal sends different \b patterns:
+      // 1. \b \b (backspace, space, backspace) = real deletion from user
+      // 2. \b<chars> (backspace followed by text) = terminal echo correction (e.g., \bpw when typing w after p)
+      let hasBackspace = processedData.includes('\b');
+      
+      if (hasBackspace && buffer.length > 0) {
+        // Check if this is a real deletion (\b \b pattern) or terminal echo correction (\b followed by text)
+        // \x08 is the backspace character (0x08)
+        const backspaceChar = '\x08';
+        const hasBackspaceSpaceBackspace = processedData.includes(backspaceChar + ' ' + backspaceChar) || 
+                                          processedData.match(/\x08\s+\x08/);
+        const hasBackspaceFollowedByText = processedData.match(/\x08[^\s\x08]/); // \b followed by non-space, non-backspace
+        
+        const isRealDeletion = hasBackspaceSpaceBackspace;
+        const isEchoCorrection = !isRealDeletion && hasBackspaceFollowedByText;
+        
+        let lastLine = buffer[buffer.length - 1];
+        
+        if (isRealDeletion) {
+          // Real deletion: \b \b pattern - remove characters from last line
+          for (let i = 0; i < processedData.length; i++) {
+            const char = processedData[i];
+            if (char === '\b') {
+              lastLine = lastLine.slice(0, -1);
+            } else if (char === ' ') {
+              // Space in \b \b pattern - skip it (it's for overwriting)
+              continue;
+            } else if (char === '\n' || char === '\r') {
+              break;
+            }
+          }
+          buffer[buffer.length - 1] = lastLine;
+          // Remove the backspace sequence from processedData (but keep spaces - they're part of the content)
+          processedData = processedData.replace(/[\b]/g, '');
+        } else if (isEchoCorrection) {
+          // Terminal echo correction: \b<text> - replace the end of last line with the new text
+          // Extract the text after \b (including spaces)
+          let correctionText = '';
+          for (let i = 0; i < processedData.length; i++) {
+            const char = processedData[i];
+            if (char === '\b') {
+              // Remove one character from last line for each \b
+              if (lastLine.length > 0) {
+                lastLine = lastLine.slice(0, -1);
+              }
+            } else if (char === '\n' || char === '\r') {
+              // Stop on newline/carriage return
+              break;
+            } else {
+              // Include all other characters including spaces
+              correctionText += char;
+            }
+          }
+          // Append the correction text
+          lastLine += correctionText;
+          buffer[buffer.length - 1] = lastLine;
+          // Clear processedData since we've applied it
+          processedData = '';
+        } else {
+          // Unknown pattern - process normally
+          let processedWithBackspace = '';
+          for (let i = 0; i < processedData.length; i++) {
+            if (processedData[i] === '\b') {
+              processedWithBackspace = processedWithBackspace.slice(0, -1);
+            } else {
+              processedWithBackspace += processedData[i];
+            }
+          }
+          processedData = processedWithBackspace;
+        }
+      } else {
+        // No backspaces or no buffer - process normally
+        let processedWithBackspace = '';
+        for (let i = 0; i < processedData.length; i++) {
+          if (processedData[i] === '\b') {
+            processedWithBackspace = processedWithBackspace.slice(0, -1);
+          } else {
+            processedWithBackspace += processedData[i];
+          }
+        }
+        processedData = processedWithBackspace;
       }
       
       // Split by newlines
@@ -274,7 +330,14 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
     socket.on('connect_error', (error) => {
       outputBufferRef.current.push(`❌ Connection error: ${error.message}`);
+      outputBufferRef.current.push(`Attempted URL: ${relayServerUrl}`);
       setOutput(outputBufferRef.current.join('\n'));
+      Alert.alert('Connection Error', `Failed to connect to relay server:\n${error.message}\n\nURL: ${relayServerUrl}`, [
+        {
+          text: 'OK',
+          onPress: () => navigation.goBack(),
+        },
+      ]);
     });
 
     socket.on('error', ({ message }) => {
@@ -288,6 +351,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const handleInputChange = (text: string) => {
     if (!socketRef.current || !paired) {
       setInput(text);
+      previousInputRef.current = text;
       return;
     }
 
@@ -307,8 +371,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       }
       
       // Send Enter (as \r only for interactive apps)
-      console.log('Enter detected in text input, sending \\r');
-      console.log('[DEBUG] Emitting terminal:input with:', JSON.stringify('\r'));
       // Send just \r (carriage return) - some interactive apps expect this for submission
       socketRef.current.emit('terminal:input', '\r');
       
@@ -322,21 +384,42 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     if (text.length > previous.length) {
       // New character(s) added - send only the new characters
       const newChars = text.slice(previous.length);
-      socketRef.current.emit('terminal:input', newChars);
-    } else if (text.length < previous.length) {
-      // Character(s) removed (backspace) - send backspace
-      const backspaces = previous.length - text.length;
-      for (let i = 0; i < backspaces; i++) {
-        socketRef.current.emit('terminal:input', '\b');
+      if (newChars) {
+        socketRef.current.emit('terminal:input', newChars);
+        previousInputRef.current = text;
+        // Track what we sent (accumulate, since we send incrementally)
+        lastSentInputRef.current = text;
       }
-    }
-    // If length is same but content changed, it might be autocorrect - send the change
-    else if (text !== previous && text.length === previous.length) {
-      // Autocorrect or similar - send backspace and new text
+    } else if (text.length < previous.length) {
+      // Character(s) removed (backspace) - DON'T send backspace here
+      // Backspace is already sent via onKeyPress, we just need to update state
+      // The terminal will echo back the deletion, which we'll process in terminal:output
+      const backspaces = previous.length - text.length;
+      
+      // Just update state - don't send backspace here
+      // If onKeyPress didn't fire (rare on iOS), backspaceSentRef will be false and we can send it
+      if (!backspaceSentRef.current) {
+        for (let i = 0; i < backspaces; i++) {
+          socketRef.current.emit('terminal:input', '\b');
+        }
+      } else {
+        // Reset the flag for next time
+        backspaceSentRef.current = false;
+      }
+      
+      previousInputRef.current = text;
+      lastSentInputRef.current = text;
+    } else if (text.length === previous.length && text !== previous) {
+      // If length is same but content changed, it might be autocorrect - send the change
+      // Send backspace and new text
       socketRef.current.emit('terminal:input', '\b' + text.slice(previous.length - 1));
+      previousInputRef.current = text;
+      lastSentInputRef.current = text;
+    } else {
+      // Same text, no change
+      previousInputRef.current = text;
     }
     
-    previousInputRef.current = text;
     setInput(text);
   };
 
@@ -349,37 +432,49 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       // Send any characters that haven't been sent yet (should be rare since we send in real-time)
       if (currentInput.length > alreadySent.length) {
         const unsent = currentInput.slice(alreadySent.length);
-        console.log('Sending unsent chars before Enter:', unsent);
-        socketRef.current.emit('terminal:input', unsent);
-        previousInputRef.current = currentInput;
-        
-        // Small delay to ensure characters are processed before Enter
-        setTimeout(() => {
-          console.log('Sending Enter to terminal (\\r only)');
-          console.log('[DEBUG] Emitting terminal:input with:', JSON.stringify('\r'));
-          if (socketRef.current && paired) {
-            // Send just \r (carriage return) - some interactive apps expect this for submission
-            socketRef.current.emit('terminal:input', '\r');
-          }
-          setInput('');
-          previousInputRef.current = '';
-        }, 50);
-      } else {
-        // No unsent chars, send Enter immediately
-        console.log('Sending Enter to terminal (\\r only)');
-        console.log('[DEBUG] Emitting terminal:input with:', JSON.stringify('\r'));
-        // Send just \r (carriage return) - some interactive apps expect this for submission
-        socketRef.current.emit('terminal:input', '\r');
-        setInput('');
-        previousInputRef.current = '';
+        if (unsent) {
+          socketRef.current.emit('terminal:input', unsent);
+          previousInputRef.current = currentInput;
+          
+          // Small delay to ensure characters are processed before Enter
+          setTimeout(() => {
+            if (socketRef.current && paired) {
+              socketRef.current.emit('terminal:input', '\r');
+            }
+            setInput('');
+            previousInputRef.current = '';
+          }, 50);
+          return;
+        }
       }
+      
+      // No unsent chars, send Enter immediately
+      socketRef.current.emit('terminal:input', '\r');
+      setInput('');
+      previousInputRef.current = '';
     }
   };
 
   // Handle Enter key - send newline
   const handleKeyPress = (e: any) => {
     const key = e.nativeEvent?.key || e.nativeEvent?.code || e.nativeEvent?.keyCode;
-    console.log('Key pressed:', key, e.nativeEvent);
+    const keyCode = e.nativeEvent?.keyCode;
+    
+    // Check for Backspace key
+    if (
+      key === 'Backspace' ||
+      keyCode === 8 || // Backspace key code
+      e.nativeEvent?.keyCode === 8
+    ) {
+      if (socketRef.current && paired) {
+        // Send \b (backspace, 0x08) which is standard for most Unix shells
+        // cursor-agent might work with \x7f, but regular shell typically expects \b
+        socketRef.current.emit('terminal:input', '\b');
+        // Mark that we've sent backspace so handleInputChange doesn't send it again
+        backspaceSentRef.current = true;
+      }
+      return;
+    }
     
     // Check for Enter key (various representations)
     if (
@@ -391,7 +486,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       e.nativeEvent?.keyCode === 13
     ) {
       if (socketRef.current && paired) {
-        console.log('Enter key detected in handleKeyPress');
         e.preventDefault?.();
         sendEnter();
       }
@@ -400,7 +494,6 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
   // Also handle Enter via onSubmitEditing for iOS compatibility
   const handleSubmit = () => {
-    console.log('onSubmitEditing fired, input:', input);
     sendEnter();
   };
 
@@ -440,7 +533,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
           selectable={true}
           selectionColor="#0f0"
         >
-          {output || 'Connecting...'}
+          {output ? parseAnsiToText(output) : 'Connecting...'}
         </Text>
       </ScrollView>
 
@@ -501,7 +594,7 @@ const styles = StyleSheet.create({
   statusText: {
     color: '#0f0',
     fontSize: 12,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     flex: 1,
   },
   copyButton: {
@@ -514,7 +607,7 @@ const styles = StyleSheet.create({
   copyButtonText: {
     color: '#000',
     fontSize: 12,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontWeight: 'bold',
   },
   outputContainer: {
@@ -547,13 +640,13 @@ const styles = StyleSheet.create({
   sendButtonText: {
     color: '#000',
     fontSize: 14,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontWeight: 'bold',
   },
   prompt: {
     color: '#0f0',
     fontSize: 16,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginRight: 8,
   },
   input: {

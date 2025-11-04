@@ -7,19 +7,19 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
+import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL } from '../config';
 
 type ConnectScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Connect'>;
 };
 
-// Default relay server URL for development (Mac's local IP)
-const DEFAULT_RELAY_SERVER_URL = 'http://192.168.1.7:3000';
-
 export default function ConnectScreen({ navigation }: ConnectScreenProps) {
+  // Always start with the default from config (not cached value)
   const [relayServerUrl, setRelayServerUrl] = useState(DEFAULT_RELAY_SERVER_URL);
   const [pairingCode, setPairingCode] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,12 +29,22 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
     const loadSavedUrl = async () => {
       try {
         const savedUrl = await AsyncStorage.getItem('relayServerUrl');
-        if (savedUrl) {
+        // If saved URL matches the old IP (192.168.1.7), clear it and use new default
+        if (savedUrl && savedUrl.includes('192.168.1.7')) {
+          console.log('Clearing old cached URL:', savedUrl);
+          await AsyncStorage.removeItem('relayServerUrl');
+          setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
+        } else if (savedUrl && savedUrl.trim() !== '') {
+          // Use saved URL if it's valid and not the old IP
           setRelayServerUrl(savedUrl);
+        } else {
+          // Ensure we use the default from config
+          setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
         }
       } catch (error) {
-        // If no saved URL, use default
-        console.log('No saved relay server URL, using default');
+        // If no saved URL, use default from config
+        console.log('No saved relay server URL, using default:', DEFAULT_RELAY_SERVER_URL);
+        setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
       }
     };
 
@@ -131,7 +141,7 @@ const styles = StyleSheet.create({
     color: '#0f0',
     textAlign: 'center',
     marginBottom: 10,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   subtitle: {
     fontSize: 16,
@@ -147,7 +157,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0f0',
     marginBottom: 8,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   input: {
     backgroundColor: '#111',
@@ -158,7 +168,7 @@ const styles = StyleSheet.create({
     color: '#0f0',
     fontSize: 16,
     marginBottom: 20,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   button: {
     backgroundColor: '#0f0',
@@ -174,7 +184,7 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 16,
     fontWeight: 'bold',
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   hint: {
     marginTop: 30,
@@ -182,6 +192,6 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     lineHeight: 20,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
 });

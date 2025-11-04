@@ -133,16 +133,12 @@ function startTerminal(cols: number = 80, rows: number = 30) {
   // Process ANSI escape codes: keep control sequences, strip colors
   terminal.onData((data) => {
     if (socket.connected) {
-      // Process ANSI codes: strip colors but keep control sequences
+      // Process ANSI codes: keep colors and control sequences
       let processedData = data;
       
-      // Remove ONLY color/formatting ANSI codes (SGR codes ending in 'm')
+      // Keep ALL color/formatting ANSI codes (SGR codes ending in 'm') - we want colors!
       // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
-      processedData = processedData.replace(/\x1b\[[0-9;]*m/g, '');
-      
-      // Keep cursor positioning sequences (H, A, B, C, D) - these are important for interactive apps
-      // Keep screen clearing sequences (J, K)
-      // Remove only formatting codes like cursor visibility, etc.
+      // Only remove cursor visibility and other non-essential formatting codes
       processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
       
       socket.emit('terminal:output', processedData);

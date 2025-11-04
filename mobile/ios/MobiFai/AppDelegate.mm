@@ -26,7 +26,7 @@
 #if DEBUG
   // Configure Metro bundler to use Mac IP address for physical device
   // Use a fixed IP address instead of relying on RCTBundleURLProvider's auto-detection
-  NSString *hostname = @"192.168.1.7";
+  NSString *hostname = @"192.168.1.174";
   NSNumber *port = @8081;
   NSString *path = @".expo/.virtual-metro-entry";
   
