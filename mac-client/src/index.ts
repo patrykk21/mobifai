@@ -39,12 +39,28 @@ function connectToRelay() {
     console.log(chalk.gray('Code expires in 5 minutes.\n'));
   });
 
+  // Store terminal dimensions from mobile
+  let terminalCols = 80;
+  let terminalRows = 30;
+  
+  socket.on('terminal:dimensions', ({ cols, rows }) => {
+    console.log(chalk.cyan(`📐 Received terminal dimensions: ${cols}x${rows}`));
+    terminalCols = cols;
+    terminalRows = rows;
+    
+    // If terminal is already running, resize it
+    if (terminal) {
+      terminal.resize(cols, rows);
+      console.log(chalk.gray(`Terminal resized to ${cols}x${rows}`));
+    }
+  });
+
   socket.on('paired', ({ message, mobileId }) => {
     console.log(chalk.green(`\n✅ ${message}`));
     console.log(chalk.gray(`Mobile ID: ${mobileId}\n`));
 
-    // Create terminal session
-    startTerminal();
+    // Create terminal session with dimensions from mobile
+    startTerminal(terminalCols, terminalRows);
   });
 
   socket.on('paired_device_disconnected', ({ message }) => {
@@ -56,10 +72,15 @@ function connectToRelay() {
       terminal = null;
       console.log(chalk.gray('Terminal session closed.\n'));
     }
+
+    // Request a new pairing code from the relay server
+    console.log(chalk.yellow('🔄 Generating new pairing code...'));
+    socket.emit('register', { type: 'mac' });
   });
 
   socket.on('terminal:input', (data: string) => {
     if (terminal) {
+      // Write directly to terminal - node-pty will handle it correctly
       terminal.write(data);
     }
   });
@@ -89,7 +110,7 @@ function connectToRelay() {
   });
 }
 
-function startTerminal() {
+function startTerminal(cols: number = 80, rows: number = 30) {
   if (terminal) {
     console.log(chalk.yellow('⚠️  Terminal already running'));
     return;
@@ -98,22 +119,33 @@ function startTerminal() {
   const shell = os.platform() === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
 
   console.log(chalk.cyan(`\n🖥️  Starting terminal session (${shell})...`));
+  console.log(chalk.gray(`Terminal dimensions: ${cols}x${rows}`));
 
   terminal = pty.spawn(shell, [], {
     name: 'xterm-256color',
-    cols: 80,
-    rows: 30,
+    cols,
+    rows,
     cwd: process.env.HOME || process.cwd(),
     env: process.env as { [key: string]: string }
   });
 
   // Send terminal output to mobile device via relay
-  // Strip ANSI escape codes for better display on mobile
+  // Process ANSI escape codes: keep control sequences, strip colors
   terminal.onData((data) => {
     if (socket.connected) {
-      // Strip ANSI escape codes (colors, formatting, etc.) for cleaner output
-      const cleanData = stripAnsi(data);
-      socket.emit('terminal:output', cleanData);
+      // Process ANSI codes: strip colors but keep control sequences
+      let processedData = data;
+      
+      // Remove ONLY color/formatting ANSI codes (SGR codes ending in 'm')
+      // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
+      processedData = processedData.replace(/\x1b\[[0-9;]*m/g, '');
+      
+      // Keep cursor positioning sequences (H, A, B, C, D) - these are important for interactive apps
+      // Keep screen clearing sequences (J, K)
+      // Remove only formatting codes like cursor visibility, etc.
+      processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
+      
+      socket.emit('terminal:output', processedData);
     }
   });
 

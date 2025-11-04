@@ -50,13 +50,21 @@ io.on('connection', (socket) => {
     console.log(`Registering ${type} device:`, socket.id);
 
     if (type === 'mac') {
-      // Generate pairing code for Mac
+      // If Mac already exists, clean up old pairing code and pairing
+      const existingDevice = devices.get(socket.id);
+      if (existingDevice && existingDevice.pairingCode) {
+        pairingCodes.delete(existingDevice.pairingCode);
+        console.log(`🗑️  Removed old pairing code: ${existingDevice.pairingCode}`);
+      }
+
+      // Generate new pairing code for Mac
       const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
 
       devices.set(socket.id, {
         socket,
         type: 'mac',
-        pairingCode
+        pairingCode,
+        pairedWith: undefined // Clear any existing pairing
       });
 
       pairingCodes.set(pairingCode, socket.id);
@@ -94,7 +102,7 @@ io.on('connection', (socket) => {
   });
 
   // Pair mobile with Mac using code
-  socket.on('pair', ({ pairingCode }: { pairingCode: string }) => {
+  socket.on('pair', ({ pairingCode, cols, rows }: { pairingCode: string; cols?: number; rows?: number }) => {
     const macSocketId = pairingCodes.get(pairingCode);
 
     if (!macSocketId) {
@@ -122,6 +130,12 @@ io.on('connection', (socket) => {
 
     devices.set(macSocketId, macDevice);
     devices.set(socket.id, mobileDevice);
+    
+    // Send terminal dimensions to Mac if provided
+    if (cols && rows) {
+      console.log(`📐 Mobile terminal dimensions: ${cols}x${rows}`);
+      macDevice.socket.emit('terminal:dimensions', { cols, rows });
+    }
 
     // Notify both devices
     socket.emit('paired', {
@@ -170,6 +184,17 @@ io.on('connection', (socket) => {
     const pairedDevice = devices.get(device.pairedWith);
     if (pairedDevice) {
       pairedDevice.socket.emit('terminal:resize', { cols, rows });
+    }
+  });
+
+  // Relay terminal dimensions from Mobile to Mac
+  socket.on('terminal:dimensions', ({ cols, rows }: { cols: number; rows: number }) => {
+    const device = devices.get(socket.id);
+    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
+
+    const pairedDevice = devices.get(device.pairedWith);
+    if (pairedDevice) {
+      pairedDevice.socket.emit('terminal:dimensions', { cols, rows });
     }
   });
 

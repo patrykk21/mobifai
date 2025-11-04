@@ -25,15 +25,27 @@
 {
 #if DEBUG
   // Configure Metro bundler to use Mac IP address for physical device
-  RCTBundleURLProvider *settings = [RCTBundleURLProvider sharedSettings];
-  NSURL *defaultURL = [settings jsBundleURLForBundleRoot:@".expo/.virtual-metro-entry"];
+  // Use a fixed IP address instead of relying on RCTBundleURLProvider's auto-detection
+  NSString *hostname = @"192.168.1.7";
+  NSNumber *port = @8081;
+  NSString *path = @".expo/.virtual-metro-entry";
   
-  // Replace localhost with Mac IP address for physical device connection
-  NSString *urlString = [defaultURL absoluteString];
-  urlString = [urlString stringByReplacingOccurrencesOfString:@"localhost" withString:@"192.168.1.7"];
-  urlString = [urlString stringByReplacingOccurrencesOfString:@"127.0.0.1" withString:@"192.168.1.7"];
+  // Construct the bundle URL directly
+  NSString *urlString = [NSString stringWithFormat:@"http://%@:%@/%@.bundle?platform=ios&dev=true&minify=false&hot=false", hostname, port, path];
+  NSURL *bundleURL = [NSURL URLWithString:urlString];
   
-  return [NSURL URLWithString:urlString];
+  // Fallback to default if URL construction fails
+  if (!bundleURL) {
+    RCTBundleURLProvider *settings = [RCTBundleURLProvider sharedSettings];
+    NSURL *defaultURL = [settings jsBundleURLForBundleRoot:@".expo/.virtual-metro-entry"];
+    NSString *defaultString = [defaultURL absoluteString];
+    defaultString = [defaultString stringByReplacingOccurrencesOfString:@"localhost" withString:hostname];
+    defaultString = [defaultString stringByReplacingOccurrencesOfString:@"127.0.0.1" withString:hostname];
+    defaultString = [defaultString stringByReplacingOccurrencesOfString:@"::1" withString:hostname];
+    bundleURL = [NSURL URLWithString:defaultString];
+  }
+  
+  return bundleURL ?: [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
