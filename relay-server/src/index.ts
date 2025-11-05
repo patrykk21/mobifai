@@ -58,7 +58,12 @@ io.on('connection', (socket) => {
       }
 
       // Generate new pairing code for Mac
-      const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
+      // In DEBUG_MODE, always use "0000"
+      const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+      const pairingCode = DEBUG_MODE ? '0000' : Math.floor(100000 + Math.random() * 900000).toString();
+      if (DEBUG_MODE) {
+        console.log('🔧 DEBUG_MODE enabled: Using fixed pairing code 0000');
+      }
 
       devices.set(socket.id, {
         socket,

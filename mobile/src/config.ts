@@ -7,12 +7,14 @@ const getEnvVar = (key: string, defaultValue: string): string => {
   
   // Default values matching .env file
   const envVars: Record<string, string> = {
-    MAC_IP: '192.168.1.174',
-    RELAY_SERVER_URL: 'http://192.168.1.174:3000',
+    MAC_IP: '192.168.1.7',
+    RELAY_SERVER_URL: 'http://192.168.1.7:3000',
+    DEBUG_MODE: 'true',
   };
   
   return envVars[key] || defaultValue;
 };
 
-export const MAC_IP = getEnvVar('MAC_IP', '192.168.1.174');
-export const RELAY_SERVER_URL = getEnvVar('RELAY_SERVER_URL', 'http://192.168.1.174:3000');
+export const MAC_IP = getEnvVar('MAC_IP', '192.168.1.7');
+export const RELAY_SERVER_URL = getEnvVar('RELAY_SERVER_URL', 'http://192.168.1.7:3000');
+export const DEBUG_MODE = getEnvVar('DEBUG_MODE', 'false') === 'true';

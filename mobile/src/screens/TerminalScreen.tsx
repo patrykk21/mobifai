@@ -29,12 +29,16 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const [input, setInput] = useState('');
   const [connected, setConnected] = useState(false);
   const [paired, setPaired] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState<{ row: number; col: number } | null>(null);
+  const [cursorVisible, setCursorVisible] = useState(true);
+  const [showControlKeys, setShowControlKeys] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const socketRef = useRef<Socket | null>(null);
   const previousInputRef = useRef<string>('');
   const outputBufferRef = useRef<string[]>([]); // Line-based buffer for terminal output
   const lastSentInputRef = useRef<string>(''); // Track what we last sent to detect terminal echo
   const backspaceSentRef = useRef<boolean>(false); // Track if we've already sent a backspace via onKeyPress
+  const cursorPositionRef = useRef<{ row: number; col: number } | null>(null); // Persist cursor position across chunks
 
   // Function to calculate and send terminal dimensions
   const calculateAndSendDimensions = () => {
@@ -58,6 +62,16 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     
     return { cols, rows };
   };
+
+  // Cursor blinking effect
+  useEffect(() => {
+    if (cursorPosition) {
+      const interval = setInterval(() => {
+        setCursorVisible(prev => !prev);
+      }, 500);
+      return () => clearInterval(interval);
+    }
+  }, [cursorPosition]);
 
   useEffect(() => {
     connectToRelay();
@@ -136,6 +150,8 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       // Handle clear screen - clear everything
       if (data.includes('\x1b[2J')) {
         outputBufferRef.current = [];
+        cursorPositionRef.current = null;
+        setCursorPosition(null);
         setInput('');
         previousInputRef.current = '';
         // Keep content after clear if any
@@ -153,6 +169,68 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       // Get current buffer
       let buffer = [...outputBufferRef.current];
       
+      // Track cursor position - initialize from ref or default to end of last line
+      let cursorRow = cursorPositionRef.current?.row ?? (buffer.length > 0 ? buffer.length - 1 : 0);
+      let cursorCol = cursorPositionRef.current?.col ?? (buffer.length > 0 ? buffer[buffer.length - 1].length : 0);
+      
+      // Parse ANSI cursor movement sequences BEFORE processing
+      // \x1b[A = cursor up (default 1)
+      // \x1b[B = cursor down (default 1)
+      // \x1b[C = cursor right (default 1)
+      // \x1b[D = cursor left (default 1)
+      // \x1b[<n>A = cursor up n lines
+      // \x1b[<n>B = cursor down n lines
+      // \x1b[<n>C = cursor right n columns
+      // \x1b[<n>D = cursor left n columns
+      // \x1b[<row>;<col>H or \x1b[<row>;<col>f = move to position
+      // \x1b[<col>G = move to column (current row)
+      
+      // Match cursor sequences with optional numbers: \x1b[A or \x1b[5A
+      const cursorUpMatches = data.match(/\x1b\[(\d+)?A/g) || [];
+      const cursorDownMatches = data.match(/\x1b\[(\d+)?B/g) || [];
+      const cursorRightMatches = data.match(/\x1b\[(\d+)?C/g) || [];
+      const cursorLeftMatches = data.match(/\x1b\[(\d+)?D/g) || [];
+      const cursorPositionMatches = data.match(/\x1b\[(\d+);(\d+)[Hf]/g) || [];
+      const cursorColumnMatches = data.match(/\x1b\[(\d+)G/g) || [];
+      
+      // Update cursor position based on movement sequences
+      cursorUpMatches.forEach(match => {
+        const n = parseInt(match.match(/\d+/)?.[0] || '1');
+        cursorRow = Math.max(0, cursorRow - n);
+      });
+      
+      cursorDownMatches.forEach(match => {
+        const n = parseInt(match.match(/\d+/)?.[0] || '1');
+        cursorRow = Math.min(buffer.length - 1, cursorRow + n);
+      });
+      
+      cursorRightMatches.forEach(match => {
+        const n = parseInt(match.match(/\d+/)?.[0] || '1');
+        if (buffer[cursorRow]) {
+          cursorCol = Math.min(buffer[cursorRow].length, cursorCol + n);
+        }
+      });
+      
+      cursorLeftMatches.forEach(match => {
+        const n = parseInt(match.match(/\d+/)?.[0] || '1');
+        cursorCol = Math.max(0, cursorCol - n);
+      });
+      
+      cursorPositionMatches.forEach(match => {
+        const parts = match.match(/(\d+);(\d+)/);
+        if (parts) {
+          const row = parseInt(parts[1]) - 1; // 1-based to 0-based
+          const col = parseInt(parts[2]) - 1;
+          cursorRow = Math.max(0, Math.min(buffer.length - 1, row));
+          cursorCol = Math.max(0, col);
+        }
+      });
+      
+      cursorColumnMatches.forEach(match => {
+        const col = parseInt(match.match(/\d+/)?.[0] || '1') - 1; // 1-based to 0-based
+        cursorCol = Math.max(0, col);
+      });
+      
       // Count how many "move up" sequences we have - this tells us how many lines to replace
       const moveUpMatches = data.match(/\x1b\[1A/g) || [];
       const moveUpCount = moveUpMatches.length;
@@ -162,6 +240,11 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       const hasClearLine = data.includes('\x1b[2K');
       const hasMoveUp = moveUpCount > 0;
       const hasMoveToColumn0 = data.includes('\x1b[G');
+      
+      // Handle carriage return - reset column to 0
+      if (data.includes('\r')) {
+        cursorCol = 0;
+      }
       
       // Remove ANSI control sequences (cursor positioning, screen clearing) but KEEP color codes
       // Color codes end in 'm' (SGR - Select Graphic Rendition)
@@ -298,9 +381,47 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
         buffer.push('');
       }
       
+      // Update cursor position after processing text
+      // If we wrote text, cursor advances
+      if (processedData && !hasMoveUp && !hasClearLine) {
+        // Normal text append - cursor advances
+        if (buffer.length > 0) {
+          const lastLineIndex = buffer.length - 1;
+          cursorRow = lastLineIndex;
+          cursorCol = buffer[lastLineIndex].length;
+        }
+      }
+      
+      // Ensure cursor is within bounds
+      if (cursorRow >= buffer.length) {
+        cursorRow = buffer.length > 0 ? buffer.length - 1 : 0;
+      }
+      if (buffer[cursorRow] && cursorCol > buffer[cursorRow].length) {
+        cursorCol = buffer[cursorRow].length;
+      }
+      
+      // Persist cursor position
+      cursorPositionRef.current = { row: cursorRow, col: cursorCol };
+      setCursorPosition({ row: cursorRow, col: cursorCol });
+      
       // Update output state
       outputBufferRef.current = buffer;
-      setOutput(buffer.join('\n'));
+      
+      // Insert cursor into output if position is available
+      let outputText = buffer.join('\n');
+      if (cursorPositionRef.current && cursorVisible && cursorRow < buffer.length) {
+        // Calculate position in joined string
+        let charPos = 0;
+        for (let i = 0; i < cursorRow; i++) {
+          charPos += buffer[i].length + 1; // +1 for newline
+        }
+        charPos += cursorCol;
+        
+        // Insert cursor block character at position
+        outputText = outputText.substring(0, charPos) + '\u2588' + outputText.substring(charPos);
+      }
+      
+      setOutput(outputText);
       
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
@@ -455,10 +576,60 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     }
   };
 
+  // Send arrow key to terminal
+  const sendArrowKey = (direction: 'up' | 'down' | 'left' | 'right') => {
+    if (!socketRef.current || !paired) return;
+    
+    const arrowSequences = {
+      up: '\x1b[A',
+      down: '\x1b[B',
+      right: '\x1b[C',
+      left: '\x1b[D',
+    };
+    
+    const sequence = arrowSequences[direction];
+    console.log('[INPUT] Sending Arrow', direction + ':', JSON.stringify(sequence), `(${Array.from(sequence).map(c => c.charCodeAt(0).toString(16)).join(', ')})`);
+    socketRef.current.emit('terminal:input', sequence);
+    lastSentInputRef.current = sequence;
+  };
+
   // Handle Enter key - send newline
   const handleKeyPress = (e: any) => {
     const key = e.nativeEvent?.key || e.nativeEvent?.code || e.nativeEvent?.keyCode;
     const keyCode = e.nativeEvent?.keyCode;
+    
+    // Check for Arrow keys
+    if (key === 'ArrowUp' || keyCode === 38) {
+      if (socketRef.current && paired) {
+        e.preventDefault?.();
+        sendArrowKey('up');
+      }
+      return;
+    }
+    
+    if (key === 'ArrowDown' || keyCode === 40) {
+      if (socketRef.current && paired) {
+        e.preventDefault?.();
+        sendArrowKey('down');
+      }
+      return;
+    }
+    
+    if (key === 'ArrowLeft' || keyCode === 37) {
+      if (socketRef.current && paired) {
+        e.preventDefault?.();
+        sendArrowKey('left');
+      }
+      return;
+    }
+    
+    if (key === 'ArrowRight' || keyCode === 39) {
+      if (socketRef.current && paired) {
+        e.preventDefault?.();
+        sendArrowKey('right');
+      }
+      return;
+    }
     
     // Check for Backspace key
     if (
@@ -537,6 +708,37 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
         </Text>
       </ScrollView>
 
+      {showControlKeys && paired && (
+        <View style={styles.controlKeysContainer}>
+          <View style={styles.arrowRow}>
+            <TouchableOpacity 
+              style={styles.arrowButtonSmall} 
+              onPress={() => sendArrowKey('left')}
+            >
+              <Text style={styles.arrowButtonText}>←</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.arrowButtonSmall} 
+              onPress={() => sendArrowKey('up')}
+            >
+              <Text style={styles.arrowButtonText}>↑</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.arrowButtonSmall} 
+              onPress={() => sendArrowKey('down')}
+            >
+              <Text style={styles.arrowButtonText}>↓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.arrowButtonSmall} 
+              onPress={() => sendArrowKey('right')}
+            >
+              <Text style={styles.arrowButtonText}>→</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      
       <View style={styles.inputContainer}>
         <Text style={styles.prompt}>$</Text>
         <TextInput
@@ -557,10 +759,22 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
           enablesReturnKeyAutomatically={true}
           textContentType="none"
         />
-        {paired && input.length > 0 && (
-          <TouchableOpacity style={styles.sendButton} onPress={handleSubmit}>
-            <Text style={styles.sendButtonText}>Send</Text>
-          </TouchableOpacity>
+        {paired && (
+          <View style={styles.buttonRow}>
+            <TouchableOpacity 
+              style={styles.toggleButton} 
+              onPress={() => setShowControlKeys(!showControlKeys)}
+            >
+              <View style={styles.toggleIcon}>
+                <View style={styles.toggleIconLine} />
+                <View style={styles.toggleIconLine} />
+                <View style={styles.toggleIconLine} />
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.sendButton} onPress={handleSubmit}>
+              <Text style={styles.sendButtonText}>Send</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     </KeyboardAvoidingView>
@@ -622,20 +836,79 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  controlKeysContainer: {
+    backgroundColor: '#111',
+    borderTopWidth: 1,
+    borderTopColor: '#0f0',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'flex-end',
+  },
+  arrowRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  arrowButtonSmall: {
+    width: 24,
+    height: 24,
+    backgroundColor: 'rgba(0, 255, 0, 0.2)',
+    borderRadius: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 2,
+  },
+  arrowButtonText: {
+    color: '#0f0',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#111',
     borderTopWidth: 1,
     borderTopColor: '#0f0',
-    padding: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginBottom: 16,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 'auto',
+  },
+  toggleButton: {
+    backgroundColor: '#0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 4,
+    marginLeft: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 28,
+    width: 28,
+  },
+  toggleIcon: {
+    width: 14,
+    height: 10,
+    justifyContent: 'space-between',
+  },
+  toggleIconLine: {
+    width: '100%',
+    height: 1.5,
+    backgroundColor: '#000',
+    borderRadius: 1,
   },
   sendButton: {
     backgroundColor: '#0f0',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 6,
-    marginLeft: 8,
+    marginLeft: 6,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   sendButtonText: {
     color: '#000',

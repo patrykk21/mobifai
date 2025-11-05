@@ -12,7 +12,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL } from '../config';
+import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL, DEBUG_MODE } from '../config';
 
 type ConnectScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Connect'>;
@@ -48,7 +48,22 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
       }
     };
 
-    loadSavedUrl();
+    const init = async () => {
+      await loadSavedUrl();
+      if (DEBUG_MODE) {
+        console.log('?? DEBUG_MODE enabled: Auto-connecting with pairing code 0000');
+        await new Promise(resolve => setTimeout(resolve, 200));
+        setPairingCode('0000');
+        setTimeout(() => {
+          navigation.replace('Terminal', {
+            relayServerUrl: DEFAULT_RELAY_SERVER_URL,
+            pairingCode: '0000',
+          });
+        }, 300);
+      }
+    };
+
+    init();
   }, []);
 
   const handleConnect = async () => {
