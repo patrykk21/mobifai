@@ -29,6 +29,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const [input, setInput] = useState('');
   const [connected, setConnected] = useState(false);
   const [paired, setPaired] = useState(false);
+  const [terminalReady, setTerminalReady] = useState(false);
   const [cursorPosition, setCursorPosition] = useState<{ row: number; col: number } | null>(null);
   const [cursorVisible, setCursorVisible] = useState(true);
   const [showControlKeys, setShowControlKeys] = useState(false);
@@ -39,6 +40,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const lastSentInputRef = useRef<string>(''); // Track what we last sent to detect terminal echo
   const backspaceSentRef = useRef<boolean>(false); // Track if we've already sent a backspace via onKeyPress
   const cursorPositionRef = useRef<{ row: number; col: number } | null>(null); // Persist cursor position across chunks
+  const terminalReadyRef = useRef<boolean>(false); // Track if terminal is ready to accept output
 
   // Function to calculate and send terminal dimensions
   const calculateAndSendDimensions = () => {
@@ -54,10 +56,14 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     const cols = Math.floor(terminalWidth / charWidth);
     const rows = Math.floor(terminalHeight / charHeight);
     
+    console.log(`📐 Calculated dimensions: ${cols}x${rows} (screen: ${screenWidth}x${screenHeight})`);
     
     // Send dimensions if socket is connected and paired
     if (socketRef.current && paired) {
+      console.log(`📤 Sending terminal:dimensions to Mac: ${cols}x${rows}`);
       socketRef.current.emit('terminal:dimensions', { cols, rows });
+    } else {
+      console.log(`⚠️ Cannot send dimensions - paired: ${paired}, socket: ${!!socketRef.current}`);
     }
     
     return { cols, rows };
@@ -75,29 +81,34 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
   useEffect(() => {
     connectToRelay();
-    
-    // Listen for orientation/dimension changes
-    const subscription = Dimensions.addEventListener('change', () => {
-      // Wait a bit for dimensions to update
-      setTimeout(() => {
-        calculateAndSendDimensions();
-      }, 100);
-    });
 
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
-      subscription?.remove();
     };
   }, []);
   
-  // Separate effect to handle paired state changes
+  // Separate effect to handle paired state changes and dimension changes
   useEffect(() => {
     if (paired) {
       // Calculate and send dimensions when paired
       calculateAndSendDimensions();
     }
+    
+    // Listen for orientation/dimension changes
+    const subscription = Dimensions.addEventListener('change', () => {
+      if (paired) {
+        // Wait a bit for dimensions to update
+        setTimeout(() => {
+          calculateAndSendDimensions();
+        }, 100);
+      }
+    });
+
+    return () => {
+      subscription?.remove();
+    };
   }, [paired]);
 
   const connectToRelay = () => {
@@ -136,16 +147,33 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
     socket.on('paired', ({ message }) => {
       setPaired(true);
-      outputBufferRef.current.push(`✅ ${message}`);
-      outputBufferRef.current.push('');
-      outputBufferRef.current.push('='.repeat(40));
-      outputBufferRef.current.push('Terminal ready. Start typing commands!');
-      outputBufferRef.current.push('='.repeat(40));
-      outputBufferRef.current.push('');
-      setOutput(outputBufferRef.current.join('\n'));
+      console.log(`✅ ${message}`);
+      // Don't update output buffer yet - wait for terminal_ready
+    });
+
+    socket.on('system:message', (data: { type: string; payload?: unknown }) => {
+      console.log('📨 System message received:', JSON.stringify(data));
+      
+      if (data.type === 'terminal_ready') {
+        console.log('✅ Terminal ready - setting state');
+        console.log('   terminalReadyRef.current =', terminalReadyRef.current, '-> true');
+        terminalReadyRef.current = true;
+        console.log('   Calling setTerminalReady(true)');
+        setTerminalReady(true);
+        console.log('   Clearing output buffer');
+        // Clear the connection messages and show clean terminal
+        outputBufferRef.current = [];
+        setOutput('');
+        console.log('✅ Terminal ready state updated');
+      }
     });
 
     socket.on('terminal:output', (data: string) => {
+      // Don't process output until terminal is ready
+      if (!terminalReadyRef.current) {
+        console.log('⏸️  Ignoring output - terminal not ready yet');
+        return;
+      }
       
       // Handle clear screen - clear everything
       if (data.includes('\x1b[2J')) {
@@ -704,7 +732,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
           selectable={true}
           selectionColor="#0f0"
         >
-          {output ? parseAnsiToText(output) : 'Connecting...'}
+          {terminalReady ? (output ? parseAnsiToText(output) : '') : 'Connecting...'}
         </Text>
       </ScrollView>
 

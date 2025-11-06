@@ -161,7 +161,9 @@ export function parseAnsiToText(text: string): React.ReactNode {
           const r = codes[i + 2];
           const g = codes[i + 3];
           const b = codes[i + 4];
-          const hexColor = `#${[r, g, b].map(x => Math.round(x).toString(16).padStart(2, '0')).join('')}`;
+          // Convert RGB to hex with reduced opacity for background colors
+          // Use rgba to make backgrounds more subtle (50% opacity)
+          const hexColor = `rgba(${r}, ${g}, ${b}, 0.5)`;
           newStyle.backgroundColor = hexColor;
           i += 4;
         }

@@ -60,7 +60,7 @@ function connectToRelay() {
     console.log(chalk.gray(`Mobile ID: ${mobileId}\n`));
 
     // Create terminal session with dimensions from mobile
-    startTerminal(terminalCols, terminalRows);
+    startTerminal(terminalCols, terminalRows, socket);
   });
 
   socket.on('paired_device_disconnected', ({ message }) => {
@@ -110,7 +110,7 @@ function connectToRelay() {
   });
 }
 
-function startTerminal(cols: number = 80, rows: number = 30) {
+function startTerminal(cols: number = 80, rows: number = 30, socketConnection: Socket) {
   if (terminal) {
     console.log(chalk.yellow('⚠️  Terminal already running'));
     return;
@@ -121,29 +121,101 @@ function startTerminal(cols: number = 80, rows: number = 30) {
   console.log(chalk.cyan(`\n🖥️  Starting terminal session (${shell})...`));
   console.log(chalk.gray(`Terminal dimensions: ${cols}x${rows}`));
 
-  terminal = pty.spawn(shell, [], {
+  // Create environment with color support enabled
+  const env = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    FORCE_COLOR: '1',
+    // Enable git colors
+    GIT_PAGER: 'cat',
+    // Ensure git uses colors
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'color.ui',
+    GIT_CONFIG_VALUE_0: 'always',
+    GIT_CONFIG_KEY_1: 'color.branch',
+    GIT_CONFIG_VALUE_1: 'always',
+  } as { [key: string]: string };
+
+  // For zsh, we need to make it an interactive login shell to load .zshrc
+  // This ensures zsh themes (oh-my-zsh, powerlevel10k, etc.) and git branch info are loaded
+  const shellArgs: string[] = [];
+  if (shell.includes('zsh')) {
+    // Make zsh run as an interactive login shell to load .zshrc
+    shellArgs.push('-l'); // login shell
+    shellArgs.push('-i'); // interactive
+  } else if (shell.includes('bash')) {
+    // For bash, use --login to load .bashrc
+    shellArgs.push('--login');
+  }
+
+  terminal = pty.spawn(shell, shellArgs, {
     name: 'xterm-256color',
     cols,
     rows,
     cwd: process.env.HOME || process.cwd(),
-    env: process.env as { [key: string]: string }
+    env
   });
 
-  // Send terminal output to mobile device via relay
-  // Process ANSI escape codes: keep control sequences, strip colors
-  terminal.onData((data) => {
-    if (socket.connected) {
-      // Process ANSI codes: keep colors and control sequences
-      let processedData = data;
+  console.log(chalk.gray('⏳ Configuring zsh prompt...'));
+
+  // Buffer to collect output during initialization
+  let initOutputBuffer = '';
+  let dataListener: ((data: string) => void) | null = null;
+
+  // Temporary listener to capture all output during init
+  const tempListener = (data: string) => {
+    initOutputBuffer += data;
+  };
+  terminal.onData(tempListener);
+
+  // Configure zsh first, before connecting to mobile
+  setTimeout(() => {
+    if (terminal) {
+      // Add git branch info to prompt using a precmd hook
+      // Use zsh's native %F{color} syntax instead of raw ANSI codes
+      terminal.write(`autoload -Uz vcs_info\nprecmd() { vcs_info }\nzstyle ':vcs_info:git:*' formats ' %F{green}%b%f'\nsetopt PROMPT_SUBST\nPROMPT='%F{blue}%~%f\$vcs_info_msg_0_ %F{green}%#%f '\nclear\n`);
       
-      // Keep ALL color/formatting ANSI codes (SGR codes ending in 'm') - we want colors!
-      // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
-      // Only remove cursor visibility and other non-essential formatting codes
-      processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
+      console.log(chalk.green('✅ Zsh configured'));
       
-      socket.emit('terminal:output', processedData);
+      // Wait a bit for prompt to appear, then start sending to mobile
+      setTimeout(() => {
+        console.log(chalk.cyan('📤 Sending terminal_ready message to mobile...'));
+        console.log(chalk.gray(`Buffered output length: ${initOutputBuffer.length} chars`));
+        console.log(chalk.gray(`Buffered output preview: ${stripAnsi(initOutputBuffer).substring(0, 100)}`));
+        
+        // Send terminal_ready FIRST so mobile will accept the output
+        socketConnection.emit('system:message', { type: 'terminal_ready' });
+        
+        // Then send the buffered output (including the final prompt) to mobile
+        if (initOutputBuffer) {
+          const processedData = initOutputBuffer.replace(/\x1b\[[?0-9]*[hl]/g, '');
+          console.log(chalk.gray(`Sending buffered output to mobile...`));
+          socketConnection.emit('terminal:output', processedData);
+        } else {
+          console.log(chalk.yellow('⚠️  No buffered output to send!'));
+        }
+        
+        console.log(chalk.green('✅ Terminal ready - now streaming to mobile\n'));
+        
+        // Now replace with the real listener for ongoing output
+        dataListener = (data: string) => {
+          if (socketConnection.connected) {
+            // Process ANSI codes: keep colors and control sequences
+            let processedData = data;
+            
+            // Keep ALL color/formatting ANSI codes (SGR codes ending in 'm') - we want colors!
+            // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
+            // Only remove cursor visibility and other non-essential formatting codes
+            processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
+            
+            socketConnection.emit('terminal:output', processedData);
+          }
+        };
+        terminal!.onData(dataListener);
+      }, 500);
     }
-  });
+  }, 500);
 
   terminal.onExit(() => {
     console.log(chalk.gray('\nTerminal session ended.'));

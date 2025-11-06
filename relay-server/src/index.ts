@@ -203,6 +203,17 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Relay system messages between devices
+  socket.on('system:message', (data: { type: string; payload?: unknown }) => {
+    const device = devices.get(socket.id);
+    if (!device || !device.pairedWith) return;
+
+    const pairedDevice = devices.get(device.pairedWith);
+    if (pairedDevice) {
+      pairedDevice.socket.emit('system:message', data);
+    }
+  });
+
   // Handle disconnect
   socket.on('disconnect', () => {
     const device = devices.get(socket.id);
