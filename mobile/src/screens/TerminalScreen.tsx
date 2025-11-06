@@ -717,7 +717,10 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
         </Text>
         {output ? (
           <TouchableOpacity style={styles.copyButton} onPress={copyAllOutput}>
-            <Text style={styles.copyButtonText}>Copy All</Text>
+            <View style={styles.copyIcon}>
+              <View style={styles.copyIconRect} />
+              <View style={styles.copyIconRectBack} />
+            </View>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -818,39 +821,62 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 10,
-    backgroundColor: '#111',
-    borderBottomWidth: 1,
-    borderBottomColor: '#0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(17, 17, 17, 0.6)',
+    overflow: 'hidden',
   },
   indicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
     backgroundColor: '#f00',
-    marginRight: 8,
+    marginRight: 6,
   },
   indicatorConnected: {
     backgroundColor: '#0f0',
   },
   statusText: {
     color: '#0f0',
-    fontSize: 12,
+    fontSize: 9,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     flex: 1,
   },
   copyButton: {
     backgroundColor: '#0f0',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 4,
-    marginLeft: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 3,
+    marginLeft: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  copyButtonText: {
-    color: '#000',
-    fontSize: 12,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontWeight: 'bold',
+  copyIcon: {
+    width: 10,
+    height: 10,
+    position: 'relative',
+  },
+  copyIconRect: {
+    position: 'absolute',
+    top: 2,
+    left: 2,
+    width: 8,
+    height: 8,
+    borderWidth: 1.5,
+    borderColor: '#000',
+    borderRadius: 1,
+    backgroundColor: 'transparent',
+  },
+  copyIconRectBack: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 8,
+    height: 8,
+    borderWidth: 1.5,
+    borderColor: '#000',
+    borderRadius: 1,
+    backgroundColor: '#0f0',
   },
   outputContainer: {
     flex: 1,
