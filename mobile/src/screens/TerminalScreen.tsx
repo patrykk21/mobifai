@@ -821,7 +821,16 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
             if (socketRef.current) {
               socketRef.current.disconnect();
             }
-            navigation.navigate('Connect');
+            // Use pop to go back with proper animation
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              // If can't go back, reset to Connect screen
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'Connect' }],
+              });
+            }
           }}
         >
           <Text style={styles.backButtonText}>←</Text>
