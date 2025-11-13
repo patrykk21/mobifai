@@ -28,7 +28,7 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
       console.log('🔥 DEBUG mode enabled: Auto-connecting with pairing code 0000');
       setPairingCode('0000');
       setTimeout(() => {
-        navigation.replace('Terminal', {
+        navigation.navigate('Terminal', {
           relayServerUrl: DEFAULT_RELAY_SERVER_URL,
           pairingCode: '0000',
         });
@@ -46,7 +46,7 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
 
     try {
       // Navigate to terminal with pairing code
-      navigation.replace('Terminal', {
+      navigation.navigate('Terminal', {
         relayServerUrl,
         pairingCode,
       });
