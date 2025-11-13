@@ -1,24 +1,44 @@
 // Configuration for mobile app
 // Note: React Native doesn't support .env files without additional libraries
 // 
-// ⚠️ CHANGE THESE VALUES TO MATCH YOUR NETWORK:
+// ⚠️ REQUIRED: SET THESE VALUES TO MATCH YOUR NETWORK
 // 1. Find your Mac's local IP: System Settings → Network → Wi-Fi → Details
 // 2. Update MAC_IP and RELAY_SERVER_URL below
 // 3. For iOS Simulator, use 'localhost' (simulator shares host network)
 // 4. For Physical Device, use your Mac's IP address on local network
 
-const getEnvVar = (key: string, defaultValue: string): string => {
-  // Configuration values
-  // TODO: Update these to match your network setup
-  const envVars: Record<string, string> = {
-    MAC_IP: '192.168.1.102',                    // Your Mac's local IP address
-    RELAY_SERVER_URL: 'http://192.168.1.102:3000', // Relay server URL
-    DEBUG_MODE: 'true',
-  };
-  
-  return envVars[key] || defaultValue;
-};
+// ⚠️ CONFIGURATION - UPDATE THESE VALUES
+const MAC_IP = '192.168.178.72';                    // Your Mac's local IP address
+const RELAY_SERVER_URL = 'http://192.168.178.72:3000'; // Relay server URL
+const DEBUG_MODE = 'true';
 
-export const MAC_IP = getEnvVar('MAC_IP', '192.168.1.102');
-export const RELAY_SERVER_URL = getEnvVar('RELAY_SERVER_URL', 'http://192.168.1.102:3000');
-export const DEBUG_MODE = getEnvVar('DEBUG_MODE', 'true') === 'true';
+// Validate configuration
+if (!MAC_IP || MAC_IP === 'YOUR_MAC_IP_HERE') {
+  throw new Error(
+    '❌ Configuration Error: MAC_IP is not set!\n' +
+    'Update mobile/src/config.ts with your Mac\'s IP address.\n' +
+    'Find it at: System Settings → Network → Wi-Fi → Details'
+  );
+}
+
+if (!RELAY_SERVER_URL || RELAY_SERVER_URL === 'http://YOUR_MAC_IP_HERE:3000') {
+  throw new Error(
+    '❌ Configuration Error: RELAY_SERVER_URL is not set!\n' +
+    'Update mobile/src/config.ts with your relay server URL.\n' +
+    'Example: http://192.168.1.100:3000'
+  );
+}
+
+// Validate URL format
+try {
+  new URL(RELAY_SERVER_URL);
+} catch (error) {
+  throw new Error(
+    `❌ Configuration Error: Invalid RELAY_SERVER_URL format!\n` +
+    `Current value: ${RELAY_SERVER_URL}\n` +
+    `Expected format: http://YOUR_IP:3000`
+  );
+}
+
+export { MAC_IP, RELAY_SERVER_URL };
+export const DEBUG = DEBUG_MODE === 'true';

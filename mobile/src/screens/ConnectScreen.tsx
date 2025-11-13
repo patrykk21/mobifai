@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL, DEBUG_MODE } from '../config';
+import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL, DEBUG } from '../config';
 
 type ConnectScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Connect'>;
@@ -24,8 +24,8 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (DEBUG_MODE) {
-      console.log('🔥 DEBUG_MODE enabled: Auto-connecting with pairing code 0000');
+    if (DEBUG) {
+      console.log('🔥 DEBUG mode enabled: Auto-connecting with pairing code 0000');
       setPairingCode('0000');
       setTimeout(() => {
         navigation.replace('Terminal', {
