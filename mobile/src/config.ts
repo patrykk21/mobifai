@@ -8,8 +8,8 @@
 // 4. For Physical Device, use your Mac's IP address on local network
 
 // ⚠️ CONFIGURATION - UPDATE THESE VALUES
-const MAC_IP = '192.168.1.7';                    // Your Mac's local IP address
-const RELAY_SERVER_URL = 'http://192.168.1.7:3000'; // Relay server URL
+const MAC_IP = '192.168.178.72';                    // Your Mac's local IP address
+const RELAY_SERVER_URL = 'http://192.168.178.72:3000'; // Relay server URL
 const DEBUG_MODE = 'true';
 
 // Validate configuration
