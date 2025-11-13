@@ -811,6 +811,12 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       keyboardVerticalOffset={100}
     >
       <View style={styles.statusBar}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>←</Text>
+        </TouchableOpacity>
         <View style={[styles.indicator, connected && styles.indicatorConnected]} />
         <Text style={styles.statusText}>
           {paired && webrtcConnected
@@ -931,6 +937,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: 'rgba(17, 17, 17, 0.6)',
     overflow: 'hidden',
+  },
+  backButton: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 4,
+  },
+  backButtonText: {
+    color: '#0f0',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   indicator: {
     width: 5,
