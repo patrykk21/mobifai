@@ -58,6 +58,8 @@ export class WebRTCService {
 
       // Create answer
       const answer = await this.peerConnection!.createAnswer();
+      
+      // Set local description once
       await this.peerConnection!.setLocalDescription(answer);
 
       // Wait for ICE gathering to complete before sending answer (with timeout)
@@ -85,8 +87,7 @@ export class WebRTCService {
 
       console.log('📡 Sending WebRTC answer to Mac (with all ICE candidates)');
 
-      // Send answer to Mac via signaling server
-      this.peerConnection!.setLocalDescription(answer);
+      // Send answer to Mac via signaling server (localDescription already set above)
       this.socket.emit('webrtc:answer', {
         answer: {
           sdp: this.peerConnection!.localDescription!.sdp,
