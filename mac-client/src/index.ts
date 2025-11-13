@@ -4,6 +4,9 @@ import os from 'os';
 import dotenv from 'dotenv';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
+import wrtc from '@roamhq/wrtc';
+const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
+type RTCDataChannel = any; // Use native type
 
 dotenv.config();
 
@@ -14,6 +17,146 @@ console.log(chalk.gray('================================\n'));
 
 let socket: Socket;
 let terminal: pty.IPty | null = null;
+let peerConnection: RTCPeerConnection | null = null;
+let dataChannel: RTCDataChannel | null = null;
+let isWebRTCConnected = false;
+let pendingIceCandidates: Array<{ candidate: string; sdpMid?: string; sdpMLineIndex?: number }> = [];
+
+async function setupWebRTC() {
+  console.log(chalk.cyan('\n🔗 Setting up WebRTC P2P connection...'));
+
+  try {
+    // Create peer connection - no STUN for local development (Mac + Simulator on same host)
+    peerConnection = new RTCPeerConnection({
+      iceServers: [], // Empty for local connections
+      iceTransportPolicy: 'all', // Allow both relay and host candidates
+      iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    });
+
+    console.log(chalk.gray('✅ Peer connection created'));
+
+    // Handle ICE candidates
+    peerConnection.onicecandidate = ({ candidate }) => {
+      if (candidate) {
+        console.log(chalk.gray('🧊 Generated ICE candidate, sending to mobile'));
+        console.log(chalk.gray(`   Type: ${candidate.candidate?.split(' ')[7] || 'unknown'}`));
+        socket.emit('webrtc:ice-candidate', {
+          candidate: {
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex
+          }
+        });
+      }
+    };
+
+    // Handle connection state changes
+    peerConnection.onconnectionstatechange = () => {
+      const state = peerConnection?.connectionState;
+      console.log(chalk.yellow(`WebRTC Connection State: ${state}`));
+      
+      if (state === 'connected') {
+        isWebRTCConnected = true;
+        console.log(chalk.bold.green('\n🎉 WebRTC P2P connection established!'));
+        console.log(chalk.gray('You can now terminate the relay server - clients will stay connected.\n'));
+      } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+        isWebRTCConnected = false;
+        console.log(chalk.red('❌ WebRTC connection lost, falling back to relay server'));
+      }
+    };
+
+    // Handle ICE connection state changes (more detailed)
+    peerConnection.onicecandidateerror = (event: any) => {
+      console.log(chalk.red(`❌ ICE candidate error: ${event.errorText || 'unknown'}`));
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+      const iceState = peerConnection?.iceConnectionState;
+      console.log(chalk.cyan(`ICE Connection State: ${iceState}`));
+      
+      if (iceState === 'failed') {
+        console.log(chalk.red('❌ ICE connection failed - check firewall/network settings'));
+      }
+    };
+
+    const originalGatheringHandler = () => {
+      const gatheringState = peerConnection?.iceGatheringState;
+      console.log(chalk.gray(`ICE Gathering State: ${gatheringState}`));
+    };
+    peerConnection.onicegatheringstatechange = originalGatheringHandler;
+
+    // Create data channel for terminal communication
+    dataChannel = peerConnection.createDataChannel('terminal');
+    console.log(chalk.gray('✅ Data channel created'));
+
+    dataChannel.onopen = () => {
+      console.log(chalk.green('✅ WebRTC data channel opened'));
+      isWebRTCConnected = true;
+    };
+
+    dataChannel.onclose = () => {
+      console.log(chalk.yellow('⚠️  WebRTC data channel closed'));
+      isWebRTCConnected = false;
+    };
+
+    // Handle incoming terminal input from mobile via WebRTC
+    dataChannel.onmessage = ({ data }) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        if (message.type === 'terminal:input' && terminal) {
+          terminal.write(message.payload);
+        } else if (message.type === 'terminal:resize' && terminal) {
+          terminal.resize(message.payload.cols, message.payload.rows);
+          console.log(chalk.gray(`Terminal resized to ${message.payload.cols}x${message.payload.rows}`));
+        }
+      } catch (error) {
+        console.log(chalk.red('❌ Error parsing WebRTC message:', error));
+      }
+    };
+
+    // Create and send offer
+    console.log(chalk.gray('Creating WebRTC offer...'));
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    
+    // Wait for ICE gathering to complete before sending offer (with timeout)
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        if (peerConnection!.iceGatheringState === 'complete') {
+          resolve();
+        } else {
+          const waitHandler = () => {
+            originalGatheringHandler(); // Call original handler
+            if (peerConnection!.iceGatheringState === 'complete') {
+              resolve();
+            }
+          };
+          peerConnection!.onicegatheringstatechange = waitHandler;
+        }
+      }),
+      new Promise<void>((resolve) => setTimeout(() => {
+        console.log(chalk.yellow('⏱️  ICE gathering timeout - proceeding with available candidates'));
+        resolve();
+      }, 3000))
+    ]);
+    
+    console.log(chalk.cyan('📡 Sending offer to mobile via relay server (with all ICE candidates)'));
+    socket.emit('webrtc:offer', {
+      offer: {
+        sdp: peerConnection.localDescription!.sdp,
+        type: peerConnection.localDescription!.type
+      }
+    });
+
+    console.log(chalk.gray('Waiting for mobile to accept WebRTC connection...'));
+  } catch (error) {
+    console.log(chalk.red('❌ Failed to setup WebRTC:', error));
+    console.log(chalk.yellow('Falling back to relay server mode'));
+  }
+}
 
 function connectToRelay() {
   console.log(chalk.yellow(`📡 Connecting to relay server: ${RELAY_SERVER}...`));
@@ -61,6 +204,9 @@ function connectToRelay() {
 
     // Create terminal session with dimensions from mobile
     startTerminal(terminalCols, terminalRows, socket);
+
+    // Initiate WebRTC connection (Mac is the offerer)
+    setupWebRTC();
   });
 
   socket.on('paired_device_disconnected', ({ message }) => {
@@ -78,8 +224,63 @@ function connectToRelay() {
     socket.emit('register', { type: 'mac' });
   });
 
+  // WebRTC Signaling handlers
+  socket.on('webrtc:answer', async ({ answer }) => {
+    console.log(chalk.cyan('📡 Received WebRTC answer from mobile'));
+    if (peerConnection) {
+      try {
+        await peerConnection.setRemoteDescription(answer);
+        console.log(chalk.green('✅ WebRTC remote description set'));
+        
+        // Add any pending ICE candidates
+        if (pendingIceCandidates.length > 0) {
+          console.log(chalk.gray(`Adding ${pendingIceCandidates.length} pending ICE candidates...`));
+          for (const candidate of pendingIceCandidates) {
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+              console.log(chalk.gray('✅ Pending ICE candidate added'));
+            } catch (error) {
+              console.log(chalk.red('❌ Failed to add pending ICE candidate:', error));
+            }
+          }
+          pendingIceCandidates = [];
+        }
+      } catch (error) {
+        console.log(chalk.red('❌ Failed to set remote description:', error));
+      }
+    }
+  });
+
+  socket.on('webrtc:ice-candidate', async ({ candidate }) => {
+    console.log(chalk.cyan('🧊 Received ICE candidate from mobile'));
+    if (peerConnection && candidate.candidate) {
+      // Queue candidates if remote description isn't set yet
+      if (!peerConnection.remoteDescription) {
+        console.log(chalk.gray('⏳ Queueing ICE candidate (remote description not set yet)'));
+        pendingIceCandidates.push({
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex
+        });
+        return;
+      }
+      
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate({
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex
+        }));
+        console.log(chalk.gray('✅ ICE candidate added'));
+      } catch (error) {
+        console.log(chalk.red('❌ Failed to add ICE candidate:', error));
+      }
+    }
+  });
+
+  // Fallback: WebSocket-based terminal communication (used if WebRTC fails)
   socket.on('terminal:input', (data: string) => {
-    if (terminal) {
+    if (!isWebRTCConnected && terminal) {
       // Write directly to terminal - node-pty will handle it correctly
       terminal.write(data);
     }
@@ -200,15 +401,28 @@ function startTerminal(cols: number = 80, rows: number = 30, socketConnection: S
         
         // Now replace with the real listener for ongoing output
         dataListener = (data: string) => {
-          if (socketConnection.connected) {
-            // Process ANSI codes: keep colors and control sequences
-            let processedData = data;
-            
-            // Keep ALL color/formatting ANSI codes (SGR codes ending in 'm') - we want colors!
-            // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
-            // Only remove cursor visibility and other non-essential formatting codes
-            processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
-            
+          // Process ANSI codes: keep colors and control sequences
+          let processedData = data;
+          
+          // Keep ALL color/formatting ANSI codes (SGR codes ending in 'm') - we want colors!
+          // Keep cursor positioning (\x1b[H, \x1b[A, \x1b[B, etc.), screen clearing (\x1b[2J), etc.
+          // Only remove cursor visibility and other non-essential formatting codes
+          processedData = processedData.replace(/\x1b\[[?0-9]*[hl]/g, '');
+          
+          // Send via WebRTC if connected, otherwise fall back to WebSocket
+          if (isWebRTCConnected && dataChannel && dataChannel.readyState === 'open') {
+            try {
+              dataChannel.send(JSON.stringify({
+                type: 'terminal:output',
+                payload: processedData
+              }));
+            } catch (error) {
+              console.log(chalk.yellow('⚠️  Failed to send via WebRTC, falling back to WebSocket'));
+              if (socketConnection.connected) {
+                socketConnection.emit('terminal:output', processedData);
+              }
+            }
+          } else if (socketConnection.connected) {
             socketConnection.emit('terminal:output', processedData);
           }
         };
@@ -231,6 +445,14 @@ process.on('SIGINT', () => {
 
   if (terminal) {
     terminal.kill();
+  }
+
+  if (dataChannel) {
+    dataChannel.close();
+  }
+
+  if (peerConnection) {
+    peerConnection.close();
   }
 
   if (socket) {

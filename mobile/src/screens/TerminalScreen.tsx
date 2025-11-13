@@ -17,6 +17,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
 import { io, Socket } from 'socket.io-client';
 import { parseAnsiToText } from '../utils/ansiParser';
+import { WebRTCService } from '../services/WebRTCService';
 
 type TerminalScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Terminal'>;
@@ -33,8 +34,10 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   const [cursorPosition, setCursorPosition] = useState<{ row: number; col: number } | null>(null);
   const [cursorVisible, setCursorVisible] = useState(true);
   const [showControlKeys, setShowControlKeys] = useState(false);
+  const [webrtcConnected, setWebrtcConnected] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const socketRef = useRef<Socket | null>(null);
+  const webrtcRef = useRef<WebRTCService | null>(null);
   const previousInputRef = useRef<string>('');
   const outputBufferRef = useRef<string[]>([]); // Line-based buffer for terminal output
   const lastSentInputRef = useRef<string>(''); // Track what we last sent to detect terminal echo
@@ -83,6 +86,9 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     connectToRelay();
 
     return () => {
+      if (webrtcRef.current) {
+        webrtcRef.current.cleanup();
+      }
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
@@ -149,6 +155,29 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       setPaired(true);
       console.log(`✅ ${message}`);
       // Don't update output buffer yet - wait for terminal_ready
+      
+      // Initialize WebRTC P2P connection
+      console.log('🔗 Initializing WebRTC P2P connection...');
+      webrtcRef.current = new WebRTCService(socket);
+      
+      // Handle WebRTC messages
+      webrtcRef.current.onMessage((data) => {
+        if (data.type === 'terminal:output') {
+          // Process terminal output via WebRTC
+          handleTerminalOutput(data.payload);
+        }
+      });
+      
+      // Handle WebRTC connection state
+      webrtcRef.current.onStateChange((state) => {
+        if (state === 'connected') {
+          setWebrtcConnected(true);
+          console.log('🎉 WebRTC P2P connected! You can now terminate the relay server.');
+        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+          setWebrtcConnected(false);
+          console.log('⚠️  WebRTC disconnected, using relay server fallback');
+        }
+      });
     });
 
     socket.on('system:message', (data: { type: string; payload?: unknown }) => {
@@ -168,7 +197,8 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       }
     });
 
-    socket.on('terminal:output', (data: string) => {
+    // Define terminal output handler function
+    const handleTerminalOutput = (data: string) => {
       // Don't process output until terminal is ready
       if (!terminalReadyRef.current) {
         console.log('⏸️  Ignoring output - terminal not ready yet');
@@ -454,6 +484,14 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 100);
+    };
+
+    // Listen for terminal output via WebSocket (fallback)
+    socket.on('terminal:output', (data: string) => {
+      // Only process via WebSocket if WebRTC is not connected
+      if (!webrtcRef.current?.isWebRTCConnected()) {
+        handleTerminalOutput(data);
+      }
     });
 
     socket.on('paired_device_disconnected', ({ message }) => {
@@ -529,12 +567,27 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       return;
     }
     
+    // Helper function to send input via WebRTC or WebSocket
+    const sendInput = (data: string) => {
+      if (webrtcRef.current?.isWebRTCConnected()) {
+        // Send via WebRTC if connected
+        const success = webrtcRef.current.sendMessage('terminal:input', data);
+        if (!success && socketRef.current) {
+          // Fallback to WebSocket if WebRTC fails
+          socketRef.current.emit('terminal:input', data);
+        }
+      } else if (socketRef.current) {
+        // Use WebSocket fallback
+        socketRef.current.emit('terminal:input', data);
+      }
+    };
+
     // Detect if text was added or removed
     if (text.length > previous.length) {
       // New character(s) added - send only the new characters
       const newChars = text.slice(previous.length);
       if (newChars) {
-        socketRef.current.emit('terminal:input', newChars);
+        sendInput(newChars);
         previousInputRef.current = text;
         // Track what we sent (accumulate, since we send incrementally)
         lastSentInputRef.current = text;
@@ -549,7 +602,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       // If onKeyPress didn't fire (rare on iOS), backspaceSentRef will be false and we can send it
       if (!backspaceSentRef.current) {
         for (let i = 0; i < backspaces; i++) {
-          socketRef.current.emit('terminal:input', '\b');
+          sendInput('\b');
         }
       } else {
         // Reset the flag for next time
@@ -561,7 +614,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     } else if (text.length === previous.length && text !== previous) {
       // If length is same but content changed, it might be autocorrect - send the change
       // Send backspace and new text
-      socketRef.current.emit('terminal:input', '\b' + text.slice(previous.length - 1));
+      sendInput('\b' + text.slice(previous.length - 1));
       previousInputRef.current = text;
       lastSentInputRef.current = text;
     } else {
@@ -574,7 +627,18 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
   // Send Enter/newline to terminal
   const sendEnter = () => {
-    if (socketRef.current && paired) {
+    if (paired) {
+      const sendInput = (data: string) => {
+        if (webrtcRef.current?.isWebRTCConnected()) {
+          const success = webrtcRef.current.sendMessage('terminal:input', data);
+          if (!success && socketRef.current) {
+            socketRef.current.emit('terminal:input', data);
+          }
+        } else if (socketRef.current) {
+          socketRef.current.emit('terminal:input', data);
+        }
+      };
+
       const currentInput = input || '';
       const alreadySent = previousInputRef.current || '';
       
@@ -582,13 +646,13 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       if (currentInput.length > alreadySent.length) {
         const unsent = currentInput.slice(alreadySent.length);
         if (unsent) {
-          socketRef.current.emit('terminal:input', unsent);
+          sendInput(unsent);
           previousInputRef.current = currentInput;
           
           // Small delay to ensure characters are processed before Enter
           setTimeout(() => {
-            if (socketRef.current && paired) {
-              socketRef.current.emit('terminal:input', '\r');
+            if (paired) {
+              sendInput('\r');
             }
             setInput('');
             previousInputRef.current = '';
@@ -598,7 +662,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       }
       
       // No unsent chars, send Enter immediately
-      socketRef.current.emit('terminal:input', '\r');
+      sendInput('\r');
       setInput('');
       previousInputRef.current = '';
     }
@@ -606,7 +670,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
 
   // Send arrow key to terminal
   const sendArrowKey = (direction: 'up' | 'down' | 'left' | 'right') => {
-    if (!socketRef.current || !paired) return;
+    if (!paired) return;
     
     const arrowSequences = {
       up: '\x1b[A',
@@ -617,7 +681,17 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     
     const sequence = arrowSequences[direction];
     console.log('[INPUT] Sending Arrow', direction + ':', JSON.stringify(sequence), `(${Array.from(sequence).map(c => c.charCodeAt(0).toString(16)).join(', ')})`);
-    socketRef.current.emit('terminal:input', sequence);
+    
+    // Send via WebRTC or WebSocket
+    if (webrtcRef.current?.isWebRTCConnected()) {
+      const success = webrtcRef.current.sendMessage('terminal:input', sequence);
+      if (!success && socketRef.current) {
+        socketRef.current.emit('terminal:input', sequence);
+      }
+    } else if (socketRef.current) {
+      socketRef.current.emit('terminal:input', sequence);
+    }
+    
     lastSentInputRef.current = sequence;
   };
 
@@ -665,10 +739,16 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       keyCode === 8 || // Backspace key code
       e.nativeEvent?.keyCode === 8
     ) {
-      if (socketRef.current && paired) {
+      if (paired) {
         // Send \b (backspace, 0x08) which is standard for most Unix shells
-        // cursor-agent might work with \x7f, but regular shell typically expects \b
-        socketRef.current.emit('terminal:input', '\b');
+        if (webrtcRef.current?.isWebRTCConnected()) {
+          const success = webrtcRef.current.sendMessage('terminal:input', '\b');
+          if (!success && socketRef.current) {
+            socketRef.current.emit('terminal:input', '\b');
+          }
+        } else if (socketRef.current) {
+          socketRef.current.emit('terminal:input', '\b');
+        }
         // Mark that we've sent backspace so handleInputChange doesn't send it again
         backspaceSentRef.current = true;
       }
@@ -697,7 +777,7 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
   };
 
   // Copy all terminal output to clipboard
-  const copyAllOutput = () => {
+  const copyAllOutput = async () => {
     if (output) {
       Clipboard.setString(output);
       Alert.alert('Copied', 'Terminal output copied to clipboard');
@@ -713,7 +793,13 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
       <View style={styles.statusBar}>
         <View style={[styles.indicator, connected && styles.indicatorConnected]} />
         <Text style={styles.statusText}>
-          {paired ? 'Paired & Connected' : connected ? 'Connected' : 'Disconnected'}
+          {paired && webrtcConnected
+            ? 'P2P Connected ⚡'
+            : paired
+            ? 'Paired (Relay)'
+            : connected
+            ? 'Connected'
+            : 'Disconnected'}
         </Text>
         {output ? (
           <TouchableOpacity style={styles.copyButton} onPress={copyAllOutput}>

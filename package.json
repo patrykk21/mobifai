@@ -1,0 +1,12 @@
+{
+  "name": "mobifai",
+  "version": "2.0.0",
+  "description": "WebRTC P2P Terminal Access",
+  "scripts": {
+    "test:webrtc": "node test-webrtc-client.js"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.1",
+    "werift": "^0.22.2"
+  }
+}

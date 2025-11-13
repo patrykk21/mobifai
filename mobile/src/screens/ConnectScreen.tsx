@@ -9,7 +9,6 @@ import {
   Alert,
   Platform,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL, DEBUG_MODE } from '../config';
@@ -25,45 +24,16 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Load saved relay server URL from AsyncStorage
-    const loadSavedUrl = async () => {
-      try {
-        const savedUrl = await AsyncStorage.getItem('relayServerUrl');
-        // If saved URL matches the old IP (192.168.1.7), clear it and use new default
-        if (savedUrl && savedUrl.includes('192.168.1.7')) {
-          console.log('Clearing old cached URL:', savedUrl);
-          await AsyncStorage.removeItem('relayServerUrl');
-          setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
-        } else if (savedUrl && savedUrl.trim() !== '') {
-          // Use saved URL if it's valid and not the old IP
-          setRelayServerUrl(savedUrl);
-        } else {
-          // Ensure we use the default from config
-          setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
-        }
-      } catch (error) {
-        // If no saved URL, use default from config
-        console.log('No saved relay server URL, using default:', DEFAULT_RELAY_SERVER_URL);
-        setRelayServerUrl(DEFAULT_RELAY_SERVER_URL);
-      }
-    };
-
-    const init = async () => {
-      await loadSavedUrl();
-      if (DEBUG_MODE) {
-        console.log('?? DEBUG_MODE enabled: Auto-connecting with pairing code 0000');
-        await new Promise(resolve => setTimeout(resolve, 200));
-        setPairingCode('0000');
-        setTimeout(() => {
-          navigation.replace('Terminal', {
-            relayServerUrl: DEFAULT_RELAY_SERVER_URL,
-            pairingCode: '0000',
-          });
-        }, 300);
-      }
-    };
-
-    init();
+    if (DEBUG_MODE) {
+      console.log('🔥 DEBUG_MODE enabled: Auto-connecting with pairing code 0000');
+      setPairingCode('0000');
+      setTimeout(() => {
+        navigation.replace('Terminal', {
+          relayServerUrl: DEFAULT_RELAY_SERVER_URL,
+          pairingCode: '0000',
+        });
+      }, 300);
+    }
   }, []);
 
   const handleConnect = async () => {
@@ -75,9 +45,6 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
     setLoading(true);
 
     try {
-      // Save relay server URL
-      await AsyncStorage.setItem('relayServerUrl', relayServerUrl);
-
       // Navigate to terminal with pairing code
       navigation.replace('Terminal', {
         relayServerUrl,

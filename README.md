@@ -22,9 +22,9 @@
 **Key Features:**
 - 🌐 **External Relay Server** - Deploy anywhere (Heroku, AWS, VPS)
 - 💻 **Mac Client** - Runs on your Mac, executes terminal commands
-- 📱 **Mobile App** - React Native app for iOS & Android
-- 🔗 **Peer-to-Peer Style** - Server relays messages between devices
-- 🔒 **Simple Pairing** - 6-digit codes that expire after 5 minutes
+- 📱 **Mobile App** - Bare React Native app for iOS & Android
+- ⚡ **WebRTC P2P** - Direct peer-to-peer connection with automatic relay fallback
+- 🔒 **Simple Pairing** - 4-digit codes that expire after 5 minutes
 - 🚀 **Real-time** - Full terminal emulation with `node-pty`
 
 ## 📦 Project Structure
@@ -209,13 +209,21 @@ cd mac-client && npm run dev
 
 ## 🔄 How It Works
 
-1. **Mac Client** connects to relay server, gets pairing code
+### Pairing & Connection
+1. **Mac Client** connects to relay server, gets 4-digit pairing code
 2. **Mobile App** connects to relay server with pairing code
 3. **Relay Server** pairs the two devices together
-4. **Mobile** sends commands → **Relay** → **Mac**
-5. **Mac** sends output → **Relay** → **Mobile**
+4. **WebRTC P2P** - Clients attempt to establish direct peer-to-peer connection
+5. **Automatic Fallback** - If P2P fails, uses relay server for communication
 
-The relay server ONLY routes messages - it doesn't store or execute anything!
+### Communication Flow
+- **P2P Mode** (preferred): Mobile ↔ Mac (direct WebRTC data channel)
+- **Relay Mode** (fallback): Mobile ↔ Relay Server ↔ Mac (Socket.IO)
+
+The relay server acts as a signaling server for WebRTC and provides fallback communication. It ONLY routes messages - it doesn't store or execute anything!
+
+### iOS Simulator Note
+⚠️ **WebRTC P2P does not work in iOS Simulator** due to network isolation limitations. The app automatically falls back to relay mode. P2P works perfectly on **real iOS devices**.
 
 ## 🌍 Deployment Options
 
@@ -315,6 +323,13 @@ curl https://your-relay-server.com/health
 - Check Mac client terminal logs
 - Ensure Mac client didn't crash
 - Try disconnecting and reconnecting mobile app
+
+### WebRTC P2P Not Connecting
+
+- **iOS Simulator**: P2P doesn't work in simulator - use a real device
+- **Real Device**: Check that both devices are on the same network or have accessible IPs
+- **Fallback**: App automatically uses relay server if P2P fails
+- **Status**: Check mobile app status bar - shows "P2P Connected ⚡" or "Paired (Relay)"
 
 ## 🎯 Use Cases
 

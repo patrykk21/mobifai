@@ -11,18 +11,19 @@
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
+      "deploymentTarget": "15.1",
       "bundleIdentifier": "com.mobifai.app",
       "infoPlist": {
         "UISupportedInterfaceOrientations": [
           "UIInterfaceOrientationPortrait",
           "UIInterfaceOrientationLandscapeLeft",
           "UIInterfaceOrientationLandscapeRight"
-        ]
+        ],
+        "NSCameraUsageDescription": "This app needs camera access for WebRTC video (optional)",
+        "NSMicrophoneUsageDescription": "This app needs microphone access for WebRTC audio (optional)"
       }
     },
     "android": {

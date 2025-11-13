@@ -159,7 +159,44 @@ io.on('connection', (socket) => {
     console.log(`🔗 Paired: Mac ${macSocketId} ↔ Mobile ${socket.id}`);
   });
 
-  // Relay terminal output from Mac to Mobile
+  // WebRTC Signaling: Relay offer from Mac to Mobile
+  socket.on('webrtc:offer', (data: { offer: RTCSessionDescriptionInit }) => {
+    const device = devices.get(socket.id);
+    if (!device || device.type !== 'mac' || !device.pairedWith) return;
+
+    const pairedDevice = devices.get(device.pairedWith);
+    if (pairedDevice) {
+      console.log(`📡 Relaying WebRTC offer from Mac ${socket.id} to Mobile ${device.pairedWith}`);
+      pairedDevice.socket.emit('webrtc:offer', data);
+    }
+  });
+
+  // WebRTC Signaling: Relay answer from Mobile to Mac
+  socket.on('webrtc:answer', (data: { answer: RTCSessionDescriptionInit }) => {
+    const device = devices.get(socket.id);
+    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
+
+    const pairedDevice = devices.get(device.pairedWith);
+    if (pairedDevice) {
+      console.log(`📡 Relaying WebRTC answer from Mobile ${socket.id} to Mac ${device.pairedWith}`);
+      pairedDevice.socket.emit('webrtc:answer', data);
+    }
+  });
+
+  // WebRTC Signaling: Relay ICE candidates
+  socket.on('webrtc:ice-candidate', (data: { candidate: RTCIceCandidateInit }) => {
+    const device = devices.get(socket.id);
+    if (!device || !device.pairedWith) return;
+
+    const pairedDevice = devices.get(device.pairedWith);
+    if (pairedDevice) {
+      console.log(`🧊 Relaying ICE candidate from ${device.type} ${socket.id} to ${pairedDevice.type} ${device.pairedWith}`);
+      pairedDevice.socket.emit('webrtc:ice-candidate', data);
+    }
+  });
+
+  // Fallback: Keep relay for backward compatibility during transition
+  // These will be used only if WebRTC fails
   socket.on('terminal:output', (data: string) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mac' || !device.pairedWith) return;
@@ -170,7 +207,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Relay terminal input from Mobile to Mac
   socket.on('terminal:input', (data: string) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mobile' || !device.pairedWith) return;
@@ -181,7 +217,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Relay terminal resize from Mobile to Mac
   socket.on('terminal:resize', ({ cols, rows }: { cols: number; rows: number }) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mobile' || !device.pairedWith) return;
@@ -192,7 +227,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Relay terminal dimensions from Mobile to Mac
   socket.on('terminal:dimensions', ({ cols, rows }: { cols: number; rows: number }) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mobile' || !device.pairedWith) return;
@@ -203,7 +237,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Relay system messages between devices
   socket.on('system:message', (data: { type: string; payload?: unknown }) => {
     const device = devices.get(socket.id);
     if (!device || !device.pairedWith) return;

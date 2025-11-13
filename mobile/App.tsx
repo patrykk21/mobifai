@@ -1,7 +1,7 @@
 import React from 'react';
+import { StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StatusBar } from 'expo-status-bar';
 import ConnectScreen from './src/screens/ConnectScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
 
@@ -15,7 +15,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export default function App() {
   return (
     <NavigationContainer>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
       <Stack.Navigator
         initialRouteName="Connect"
         screenOptions={{
