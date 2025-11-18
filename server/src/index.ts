@@ -100,10 +100,13 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const HOST = '0.0.0.0'; // Listen on all network interfaces
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
   console.log(`🚀 MobiFai server running on port ${PORT}`);
-  console.log(`📱 Mobile clients can connect to: http://localhost:${PORT}`);
+  console.log(`📱 Devices can connect to:`);
+  console.log(`   - Local: http://localhost:${PORT}`);
+  console.log(`   - Network: http://192.168.1.35:${PORT}`);
   console.log(`💻 Terminal sessions ready`);
 });

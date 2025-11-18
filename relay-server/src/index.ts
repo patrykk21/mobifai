@@ -165,7 +165,7 @@ io.on('connection', (socket) => {
   });
 
   // WebRTC Signaling: Relay offer from Mac to Mobile
-  socket.on('webrtc:offer', (data: { offer: RTCSessionDescriptionInit }) => {
+  socket.on('webrtc:offer', (data: { offer: any }) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mac' || !device.pairedWith) return;
 
@@ -177,7 +177,7 @@ io.on('connection', (socket) => {
   });
 
   // WebRTC Signaling: Relay answer from Mobile to Mac
-  socket.on('webrtc:answer', (data: { answer: RTCSessionDescriptionInit }) => {
+  socket.on('webrtc:answer', (data: { answer: any }) => {
     const device = devices.get(socket.id);
     if (!device || device.type !== 'mobile' || !device.pairedWith) return;
 
@@ -189,7 +189,7 @@ io.on('connection', (socket) => {
   });
 
   // WebRTC Signaling: Relay ICE candidates
-  socket.on('webrtc:ice-candidate', (data: { candidate: RTCIceCandidateInit }) => {
+  socket.on('webrtc:ice-candidate', (data: { candidate: any }) => {
     const device = devices.get(socket.id);
     if (!device || !device.pairedWith) return;
 
@@ -282,12 +282,15 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const HOST = '0.0.0.0'; // Listen on all network interfaces
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
   console.log('🌐 MobiFai Relay Server');
   console.log(`📡 Running on port ${PORT}`);
-  console.log(`🔗 Devices can connect to: http://localhost:${PORT}`);
+  console.log(`🔗 Devices can connect to:`);
+  console.log(`   - Local: http://localhost:${PORT}`);
+  console.log(`   - Network: http://192.168.1.35:${PORT}`);
   console.log('');
   console.log('Waiting for devices to connect...');
 });

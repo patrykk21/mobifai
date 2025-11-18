@@ -1,6 +1,6 @@
 // Configuration for mobile app
 // Note: React Native doesn't support .env files without additional libraries
-// 
+//
 // ⚠️ REQUIRED: SET THESE VALUES TO MATCH YOUR NETWORK
 // 1. Find your Mac's local IP: System Settings → Network → Wi-Fi → Details
 // 2. Update MAC_IP and RELAY_SERVER_URL below
@@ -8,24 +8,24 @@
 // 4. For Physical Device, use your Mac's IP address on local network
 
 // ⚠️ CONFIGURATION - UPDATE THESE VALUES
-const MAC_IP = '192.168.178.72';                    // Your Mac's local IP address
-const RELAY_SERVER_URL = 'http://192.168.178.72:3000'; // Relay server URL
-const DEBUG_MODE = 'true';
+const MAC_IP = "192.168.1.35"; // Your Mac's local IP address
+const RELAY_SERVER_URL = "http://192.168.1.35:3000"; // Relay server URL
+const DEBUG_MODE = "true";
 
 // Validate configuration
-if (!MAC_IP || MAC_IP === 'YOUR_MAC_IP_HERE') {
+if (!MAC_IP || MAC_IP === "YOUR_MAC_IP_HERE") {
   throw new Error(
-    '❌ Configuration Error: MAC_IP is not set!\n' +
-    'Update mobile/src/config.ts with your Mac\'s IP address.\n' +
-    'Find it at: System Settings → Network → Wi-Fi → Details'
+    "❌ Configuration Error: MAC_IP is not set!\n" +
+      "Update mobile/src/config.ts with your Mac's IP address.\n" +
+      "Find it at: System Settings → Network → Wi-Fi → Details"
   );
 }
 
-if (!RELAY_SERVER_URL || RELAY_SERVER_URL === 'http://YOUR_MAC_IP_HERE:3000') {
+if (!RELAY_SERVER_URL || RELAY_SERVER_URL === "http://YOUR_MAC_IP_HERE:3000") {
   throw new Error(
-    '❌ Configuration Error: RELAY_SERVER_URL is not set!\n' +
-    'Update mobile/src/config.ts with your relay server URL.\n' +
-    'Example: http://192.168.1.100:3000'
+    "❌ Configuration Error: RELAY_SERVER_URL is not set!\n" +
+      "Update mobile/src/config.ts with your relay server URL.\n" +
+      "Example: http://192.168.1.100:3000"
   );
 }
 
@@ -35,10 +35,10 @@ try {
 } catch (error) {
   throw new Error(
     `❌ Configuration Error: Invalid RELAY_SERVER_URL format!\n` +
-    `Current value: ${RELAY_SERVER_URL}\n` +
-    `Expected format: http://YOUR_IP:3000`
+      `Current value: ${RELAY_SERVER_URL}\n` +
+      `Expected format: http://YOUR_IP:3000`
   );
 }
 
 export { MAC_IP, RELAY_SERVER_URL };
-export const DEBUG = DEBUG_MODE === 'true';
+export const DEBUG = DEBUG_MODE === "true";
