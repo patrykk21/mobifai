@@ -1,201 +1,214 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Terminal</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css"
+    />
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            overflow: hidden;
-            -webkit-user-select: none;
-            user-select: none;
-            -webkit-touch-callout: none;
-        }
-        #terminal {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            padding: 8px;
-        }
-        .xterm {
-            height: 100%;
-            width: 100%;
-        }
-        .xterm-viewport {
-            overflow-y: auto !important;
-            -webkit-overflow-scrolling: touch;
-        }
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #000;
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+      #terminal {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 8px;
+      }
+      .xterm {
+        height: 100%;
+        width: 100%;
+      }
+      .xterm-viewport {
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div id="terminal"></div>
-    
+
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
-    
-    <script>
-        // Initialize xterm.js terminal
-        const terminal = new Terminal({
-            cursorBlink: true,
-            cursorStyle: 'block',
-            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-            fontSize: 14,
-            lineHeight: 1.2,
-            theme: {
-                background: '#000000',
-                foreground: '#00ff00',
-                cursor: '#00ff00',
-                cursorAccent: '#000000',
-                selection: 'rgba(0, 255, 0, 0.3)',
-                black: '#000000',
-                red: '#cd3131',
-                green: '#0dbc79',
-                yellow: '#e5e510',
-                blue: '#2472c8',
-                magenta: '#bc3fbc',
-                cyan: '#11a8cd',
-                white: '#e5e5e5',
-                brightBlack: '#666666',
-                brightRed: '#f14c4c',
-                brightGreen: '#23d18b',
-                brightYellow: '#f5f543',
-                brightBlue: '#3b8eea',
-                brightMagenta: '#d670d6',
-                brightCyan: '#29b8db',
-                brightWhite: '#ffffff'
-            },
-            allowProposedApi: true,
-            scrollback: 10000,
-            convertEol: false, // Don't convert \n to \r\n automatically
-            disableStdin: false
-        });
-        
-        // Add fit addon for responsive terminal sizing
-        const fitAddon = new FitAddon.FitAddon();
-        terminal.loadAddon(fitAddon);
-        
-        // Add web links addon (clickable links)
-        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-        terminal.loadAddon(webLinksAddon);
-        
-        // Open terminal in the container
-        terminal.open(document.getElementById('terminal'));
-        
-        // Fit terminal to container
-        function fitTerminal() {
-            try {
-                fitAddon.fit();
-                // Send dimensions to React Native
-                const dims = {
-                    cols: terminal.cols,
-                    rows: terminal.rows
-                };
-                window.ReactNativeWebView?.postMessage(JSON.stringify({
-                    type: 'dimensions',
-                    data: dims
-                }));
-            } catch (err) {
-                console.error('Error fitting terminal:', err);
-            }
-        }
-        
-        // Initial fit
-        setTimeout(fitTerminal, 100);
-        
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            setTimeout(fitTerminal, 100);
-        });
-        
-        // Handle orientation change
-        window.addEventListener('orientationchange', () => {
-            setTimeout(fitTerminal, 200);
-        });
-        
-        // Handle terminal input - send to React Native
-        terminal.onData((data) => {
-            window.ReactNativeWebView?.postMessage(JSON.stringify({
-                type: 'input',
-                data: data
-            }));
-        });
-        
-        // Handle terminal resize - notify React Native
-        terminal.onResize((size) => {
-            window.ReactNativeWebView?.postMessage(JSON.stringify({
-                type: 'resize',
-                data: size
-            }));
-        });
-        
-        // Listen for messages from React Native
-        window.addEventListener('message', (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                handleMessage(message);
-            } catch (err) {
-                console.error('Error parsing message:', err);
-            }
-        });
-        
-        // Also listen for document messages (Android compatibility)
-        document.addEventListener('message', (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                handleMessage(message);
-            } catch (err) {
-                console.error('Error parsing document message:', err);
-            }
-        });
-        
-        function handleMessage(message) {
-            if (message.type === 'output') {
-                // Write output to terminal
-                terminal.write(message.data);
-            } else if (message.type === 'clear') {
-                // Clear terminal
-                terminal.clear();
-            } else if (message.type === 'reset') {
-                // Reset terminal
-                terminal.reset();
-            } else if (message.type === 'resize') {
-                // Resize terminal
-                if (message.data?.cols && message.data?.rows) {
-                    terminal.resize(message.data.cols, message.data.rows);
-                }
-            } else if (message.type === 'fit') {
-                // Fit terminal to container
-                fitTerminal();
-            } else if (message.type === 'focus') {
-                // Focus terminal
-                terminal.focus();
-            }
-        }
-        
-        // Expose terminal to window for debugging
-        window.term = terminal;
-        
-        // Auto-focus terminal
-        terminal.focus();
-        
-        // Notify React Native that terminal is ready
-        setTimeout(() => {
-            window.ReactNativeWebView?.postMessage(JSON.stringify({
-                type: 'ready',
-                data: {
-                    cols: terminal.cols,
-                    rows: terminal.rows
-                }
-            }));
-        }, 200);
-    </script>
-</body>
-</html>
 
+    <script>
+      // Initialize xterm.js terminal
+      const terminal = new Terminal({
+        cursorBlink: true,
+        cursorStyle: "block",
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        fontSize: 14,
+        lineHeight: 1.2,
+        theme: {
+          background: "#000000",
+          foreground: "#00ff00",
+          cursor: "#00ff00",
+          cursorAccent: "#000000",
+          selection: "rgba(0, 255, 0, 0.3)",
+          black: "#000000",
+          red: "#cd3131",
+          green: "#0dbc79",
+          yellow: "#e5e510",
+          blue: "#2472c8",
+          magenta: "#bc3fbc",
+          cyan: "#11a8cd",
+          white: "#e5e5e5",
+          brightBlack: "#666666",
+          brightRed: "#f14c4c",
+          brightGreen: "#23d18b",
+          brightYellow: "#f5f543",
+          brightBlue: "#3b8eea",
+          brightMagenta: "#d670d6",
+          brightCyan: "#29b8db",
+          brightWhite: "#ffffff",
+        },
+        allowProposedApi: true,
+        scrollback: 10000,
+        convertEol: false, // Don't convert \n to \r\n automatically
+        disableStdin: false,
+      });
+
+      // Add fit addon for responsive terminal sizing
+      const fitAddon = new FitAddon.FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      // Add web links addon (clickable links)
+      const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+      terminal.loadAddon(webLinksAddon);
+
+      // Open terminal in the container
+      terminal.open(document.getElementById("terminal"));
+
+      // Fit terminal to container
+      function fitTerminal() {
+        try {
+          fitAddon.fit();
+          // Send dimensions to React Native
+          const dims = {
+            cols: terminal.cols,
+            rows: terminal.rows,
+          };
+          window.ReactNativeWebView?.postMessage(
+            JSON.stringify({
+              type: "dimensions",
+              data: dims,
+            })
+          );
+        } catch (err) {
+          console.error("Error fitting terminal:", err);
+        }
+      }
+
+      // Initial fit
+      setTimeout(fitTerminal, 100);
+
+      // Handle window resize
+      window.addEventListener("resize", () => {
+        setTimeout(fitTerminal, 100);
+      });
+
+      // Handle orientation change
+      window.addEventListener("orientationchange", () => {
+        setTimeout(fitTerminal, 200);
+      });
+
+      // Handle terminal input - send to React Native
+      terminal.onData((data) => {
+        window.ReactNativeWebView?.postMessage(
+          JSON.stringify({
+            type: "input",
+            data: data,
+          })
+        );
+      });
+
+      // Handle terminal resize - notify React Native
+      terminal.onResize((size) => {
+        window.ReactNativeWebView?.postMessage(
+          JSON.stringify({
+            type: "resize",
+            data: size,
+          })
+        );
+      });
+
+      // Listen for messages from React Native
+      window.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleMessage(message);
+        } catch (err) {
+          console.error("Error parsing message:", err);
+        }
+      });
+
+      // Also listen for document messages (Android compatibility)
+      document.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleMessage(message);
+        } catch (err) {
+          console.error("Error parsing document message:", err);
+        }
+      });
+
+      function handleMessage(message) {
+        if (message.type === "output") {
+          // Write output to terminal
+          terminal.write(message.data);
+        } else if (message.type === "clear") {
+          // Clear terminal
+          terminal.clear();
+        } else if (message.type === "reset") {
+          // Reset terminal
+          terminal.reset();
+        } else if (message.type === "resize") {
+          // Resize terminal
+          if (message.data?.cols && message.data?.rows) {
+            terminal.resize(message.data.cols, message.data.rows);
+          }
+        } else if (message.type === "fit") {
+          // Fit terminal to container
+          fitTerminal();
+        } else if (message.type === "focus") {
+          // Focus terminal
+          terminal.focus();
+        }
+      }
+
+      // Expose terminal to window for debugging
+      window.term = terminal;
+
+      // Auto-focus terminal
+      terminal.focus();
+
+      // Notify React Native that terminal is ready
+      setTimeout(() => {
+        window.ReactNativeWebView?.postMessage(
+          JSON.stringify({
+            type: "ready",
+            data: {
+              cols: terminal.cols,
+              rows: terminal.rows,
+            },
+          })
+        );
+      }, 200);
+    </script>
+  </body>
+</html>
