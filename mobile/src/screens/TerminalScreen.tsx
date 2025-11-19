@@ -51,6 +51,18 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
     }
   };
 
+  const handleRefreshDimensions = () => {
+    // Trigger fit in terminal
+    sendToTerminal('fit', {});
+    
+    // Send current dimensions to Mac if we have them
+    if (terminalDimensionsRef.current && paired && socketRef.current) {
+      console.log('📐 Manually refreshing dimensions:', terminalDimensionsRef.current);
+      socketRef.current.emit('terminal:dimensions', terminalDimensionsRef.current);
+      socketRef.current.emit('terminal:resize', terminalDimensionsRef.current);
+    }
+  };
+
   const connectToRelay = () => {
     setConnectionStatus('📡 Connecting to relay server...');
 
@@ -428,6 +440,12 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
             : 'Disconnected'}
         </Text>
         <TouchableOpacity
+          style={styles.refreshButton}
+          onPress={handleRefreshDimensions}
+        >
+          <Text style={styles.refreshButtonText}>↻</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.fitButton}
           onPress={() => sendToTerminal('fit', {})}
         >
@@ -491,6 +509,20 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     flex: 1,
+  },
+  refreshButton: {
+    backgroundColor: '#0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 3,
+    marginLeft: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  refreshButtonText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   fitButton: {
     backgroundColor: '#0f0',
