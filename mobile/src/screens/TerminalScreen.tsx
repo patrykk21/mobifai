@@ -562,7 +562,7 @@ const styles = StyleSheet.create({
   },
   refreshButtonText: {
     color: "#000",
-    fontSize: 12,
+    fontSize: 15,
     fontWeight: "bold",
   },
   fitButton: {
@@ -576,7 +576,7 @@ const styles = StyleSheet.create({
   },
   fitButtonText: {
     color: "#000",
-    fontSize: 12,
+    fontSize: 15,
     fontWeight: "bold",
   },
   webview: {
