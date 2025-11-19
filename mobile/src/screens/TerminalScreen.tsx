@@ -517,6 +517,7 @@ export default function TerminalScreen({
           const { nativeEvent } = syntheticEvent;
           console.error("WebView HTTP error:", nativeEvent);
         }}
+        hideKeyboardAccessoryView={true}
       />
     </KeyboardAvoidingView>
   );
