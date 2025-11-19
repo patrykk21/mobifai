@@ -14,7 +14,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
 import { io, Socket } from 'socket.io-client';
 import { WebRTCService } from '../services/WebRTCService';
-import Icon from 'react-native-vector-icons/FontAwesome';
+import { MaterialIcons } from '@expo/vector-icons';
 
 type TerminalScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Terminal'>;
@@ -444,13 +444,13 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
           style={styles.refreshButton}
           onPress={handleRefreshDimensions}
         >
-          <Icon name="refresh" size={12} color="#000" />
+          <MaterialIcons name="refresh" size={14} color="#000" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.fitButton}
           onPress={() => sendToTerminal('fit', {})}
         >
-          <Icon name="expand" size={12} color="#000" />
+          <MaterialIcons name="fit-screen" size={14} color="#000" />
         </TouchableOpacity>
       </View>
 
