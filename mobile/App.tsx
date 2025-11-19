@@ -7,7 +7,7 @@ import TerminalScreen from './src/screens/TerminalScreen';
 
 export type RootStackParamList = {
   Connect: undefined;
-  Terminal: { relayServerUrl: string; pairingCode: string };
+  Terminal: { relayServerUrl: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

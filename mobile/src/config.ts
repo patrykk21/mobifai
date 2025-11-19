@@ -9,7 +9,7 @@
 
 // ⚠️ CONFIGURATION - UPDATE THESE VALUES
 const MAC_IP = "192.168.178.72" as string; // Your Mac's local IP address
-const RELAY_SERVER_URL = "http://192.168.178.72:3000" as string; // Relay server URL
+const RELAY_SERVER_URL = "http://192.168.178.7:3000" as string; // Relay server URL
 const DEBUG_MODE = "true";
 
 // Validate configuration

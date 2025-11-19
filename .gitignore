@@ -42,3 +42,5 @@ mobile/web-build/
 
 # OS
 Thumbs.db
+.device_id
+.token

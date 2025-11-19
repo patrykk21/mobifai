@@ -3,6 +3,10 @@ import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import passport from 'passport';
+import session from 'express-session';
+import './auth.js'; // Import auth configuration
+import { generateToken, verifyToken } from './auth.js';
 
 dotenv.config();
 
@@ -15,28 +19,179 @@ const io = new Server(httpServer, {
   }
 });
 
+// Middleware
 app.use(cors());
 app.use(express.json());
+app.use(
+  session({
+    secret: process.env.COOKIE_KEY || 'mobifai-session-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { 
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      secure: false // Set to true if using HTTPS
+    }
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
 
 // Store connected devices
 interface Device {
   socket: Socket;
+  deviceId: string; // Persistent ID from client
   type: 'mac' | 'mobile';
-  pairingCode?: string;
-  pairedWith?: string; // Socket ID of paired device
+  userId?: string; // Authenticated User ID (email)
+  userProfile?: any;
+  pairedWith?: string; // DeviceID of paired device
 }
 
-const devices = new Map<string, Device>();
-const pairingCodes = new Map<string, string>(); // code -> mac socket ID
+// Maps to lookup devices
+const devicesBySocket = new Map<string, Device>();
+const devicesById = new Map<string, Device>();
+
+// Helper to match devices by User ID
+function findAndPairDevice(currentDevice: Device) {
+  const targetType = currentDevice.type === 'mac' ? 'mobile' : 'mac';
+  const userId = currentDevice.userId;
+
+  if (!userId) return;
+  
+  // Find a device of the target type with the SAME userId
+  const peerEntry = Array.from(devicesById.values()).find(d => 
+    d.type === targetType && 
+    d.userId === userId && 
+    !d.pairedWith // Must be available
+  );
+
+  if (peerEntry) {
+    const peerDevice = peerEntry;
+    
+    // Pair them
+    currentDevice.pairedWith = peerDevice.deviceId;
+    peerDevice.pairedWith = currentDevice.deviceId;
+
+    // Notify both
+    console.log(`🔗 Paired ${currentDevice.type} (${currentDevice.deviceId}) <-> ${targetType} (${peerDevice.deviceId}) for user ${userId}`);
+    
+    currentDevice.socket.emit('paired', {
+      message: `Connected to ${targetType}`,
+      peerId: peerDevice.deviceId
+    });
+    
+    peerDevice.socket.emit('paired', {
+      message: `Connected to ${currentDevice.type}`,
+      peerId: currentDevice.deviceId
+    });
+
+    // Send dimensions request
+    if (currentDevice.type === 'mac' && peerDevice.type === 'mobile') {
+      peerDevice.socket.emit('request_dimensions');
+    } else if (currentDevice.type === 'mobile' && peerDevice.type === 'mac') {
+      currentDevice.socket.emit('request_dimensions');
+    }
+  } else {
+    console.log(`⏳ Waiting for ${targetType} device for user ${userId}...`);
+    currentDevice.socket.emit('waiting_for_peer', { 
+      message: `Waiting for ${targetType} device to connect...` 
+    });
+  }
+}
+
+// --- Auth Routes ---
+
+// Initiate Google Login
+// Client should open: http://server/auth/google?deviceId=...&type=...
+app.get('/auth/google', (req, res, next) => {
+  const { deviceId, type } = req.query;
+  if (!deviceId || typeof deviceId !== 'string') {
+    return res.status(400).send('Missing deviceId');
+  }
+  
+  // Store state to retrieve deviceId after callback
+  const state = JSON.stringify({ deviceId, type: type || 'unknown' });
+  
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    state
+  })(req, res, next);
+});
+
+// Google Auth Callback
+app.get(
+  '/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/auth/failure' }),
+  (req: any, res) => {
+    // Authentication successful
+    const stateStr = req.query.state as string;
+    let deviceId = '';
+    
+    try {
+      const state = JSON.parse(stateStr);
+      deviceId = state.deviceId;
+    } catch (e) {
+      console.error('Failed to parse state', e);
+      return res.redirect('/auth/failure');
+    }
+
+    const user = req.user;
+    const token = generateToken(user);
+
+    console.log(`✅ User authenticated: ${user.email} for device ${deviceId}`);
+
+    // Find the device and emit the token
+    const device = devicesById.get(deviceId);
+    if (device) {
+      device.socket.emit('authenticated', {
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          photo: user.photo
+        }
+      });
+      
+      // Update device with user info immediately
+      device.userId = user.email;
+      device.userProfile = user;
+      
+      // Try to pair
+      findAndPairDevice(device);
+
+      res.send(`
+        <html>
+          <body style="background: #111; color: #0f0; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
+            <h1>✅ Authentication Successful</h1>
+            <p>You can close this window and return to your application.</p>
+            <script>
+              setTimeout(() => window.close(), 2000);
+            </script>
+          </body>
+        </html>
+      `);
+    } else {
+      // Device might have disconnected, store pending token? 
+      // For now just show success and hope client reconnects and asks for status (not implemented)
+      // Or reliance on persistent socket for Mac, and short disconnect for mobile.
+      res.send('Authentication successful. Please return to the app.');
+    }
+  }
+);
+
+app.get('/auth/failure', (req, res) => {
+  res.send('Authentication failed. Please try again.');
+});
 
 // Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    connectedDevices: {
-      mac: Array.from(devices.values()).filter(d => d.type === 'mac').length,
-      mobile: Array.from(devices.values()).filter(d => d.type === 'mobile').length,
+    devices: {
+      total: devicesById.size,
+      mac: Array.from(devicesById.values()).filter(d => d.type === 'mac').length,
+      mobile: Array.from(devicesById.values()).filter(d => d.type === 'mobile').length,
     }
   });
 });
@@ -45,252 +200,119 @@ app.get('/health', (req, res) => {
 io.on('connection', (socket) => {
   console.log('Device connected:', socket.id);
 
-  // Register device
-  socket.on('register', ({ type }: { type: 'mac' | 'mobile' }) => {
-    console.log(`Registering ${type} device:`, socket.id);
-
-    if (type === 'mac') {
-      // If Mac already exists, clean up old pairing code and pairing
-      const existingDevice = devices.get(socket.id);
-      if (existingDevice && existingDevice.pairingCode) {
-        pairingCodes.delete(existingDevice.pairingCode);
-        console.log(`🗑️  Removed old pairing code: ${existingDevice.pairingCode}`);
-      }
-
-      // Generate new pairing code for Mac
-      // In DEBUG_MODE, always use "0000"
-      const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
-      const pairingCode = DEBUG_MODE ? '0000' : Math.floor(100000 + Math.random() * 900000).toString();
-      if (DEBUG_MODE) {
-        console.log('🔧 DEBUG_MODE enabled: Using fixed pairing code 0000');
-      }
-
-      devices.set(socket.id, {
-        socket,
-        type: 'mac',
-        pairingCode,
-        pairedWith: undefined // Clear any existing pairing
-      });
-
-      pairingCodes.set(pairingCode, socket.id);
-
-      // Send pairing code to Mac
-      socket.emit('registered', {
-        type: 'mac',
-        pairingCode,
-        message: 'Mac registered. Share this code with your mobile device.'
-      });
-
-      console.log(`✅ Mac registered with code: ${pairingCode}`);
-
-      // Auto-expire pairing code after 5 minutes
-      setTimeout(() => {
-        pairingCodes.delete(pairingCode);
-        const device = devices.get(socket.id);
-        if (device && !device.pairedWith) {
-          console.log(`⏰ Pairing code expired: ${pairingCode}`);
-          // Notify Mac client that code expired so it can get a new one
-          socket.emit('pairing_code_expired', { 
-            message: 'Pairing code expired',
-            expiredCode: pairingCode 
-          });
-        }
-      }, 5 * 60 * 1000);
-    } else {
-      devices.set(socket.id, {
-        socket,
-        type: 'mobile'
-      });
-
-      socket.emit('registered', {
-        type: 'mobile',
-        message: 'Mobile device registered. Enter pairing code to connect.'
-      });
-
-      console.log('✅ Mobile device registered');
-    }
-  });
-
-  // Pair mobile with Mac using code
-  socket.on('pair', ({ pairingCode, cols, rows }: { pairingCode: string; cols?: number; rows?: number }) => {
-    const macSocketId = pairingCodes.get(pairingCode);
-
-    if (!macSocketId) {
-      socket.emit('error', { message: 'Invalid or expired pairing code' });
-      return;
+  // Register device with optional token
+  socket.on('register', ({ type, token, deviceId }: { type: 'mac' | 'mobile'; token?: string; deviceId: string }) => {
+    if (!deviceId) {
+       socket.emit('error', { message: 'deviceId required' });
+       return;
     }
 
-    const macDevice = devices.get(macSocketId);
-    const mobileDevice = devices.get(socket.id);
-
-    if (!macDevice || !mobileDevice) {
-      socket.emit('error', { message: 'Device not found' });
-      return;
-    }
-
-    // Check if Mac is already paired
-    if (macDevice.pairedWith) {
-      socket.emit('error', { message: 'Mac is already paired with another device' });
-      return;
-    }
-
-    // Pair devices
-    macDevice.pairedWith = socket.id;
-    mobileDevice.pairedWith = macSocketId;
-
-    devices.set(macSocketId, macDevice);
-    devices.set(socket.id, mobileDevice);
+    console.log(`Registering ${type} device: ${deviceId} (${socket.id})`);
     
-    // Send terminal dimensions to Mac if provided
-    if (cols && rows) {
-      console.log(`📐 Mobile terminal dimensions: ${cols}x${rows}`);
-      macDevice.socket.emit('terminal:dimensions', { cols, rows });
+    let userId: string | undefined;
+    let userProfile: any;
+
+    // Verify token if provided
+    if (token) {
+      const decoded: any = verifyToken(token);
+      if (decoded) {
+        userId = decoded.email;
+        userProfile = decoded;
+        console.log(`🔓 Authenticated as ${userId}`);
+      } else {
+        console.log('❌ Invalid token provided');
+        socket.emit('auth_error', { message: 'Invalid or expired token' });
+        return;
+      }
     }
 
-    // Notify both devices
-    socket.emit('paired', {
-      message: 'Successfully paired with Mac',
-      macId: macSocketId
-    });
+    const device: Device = {
+      socket,
+      deviceId,
+      type,
+      userId,
+      userProfile,
+      pairedWith: undefined
+    };
 
-    macDevice.socket.emit('paired', {
-      message: 'Mobile device connected',
-      mobileId: socket.id
-    });
+    // Store device info
+    devicesBySocket.set(socket.id, device);
+    devicesById.set(deviceId, device);
 
-    // Remove pairing code
-    pairingCodes.delete(pairingCode);
-
-    console.log(`🔗 Paired: Mac ${macSocketId} ↔ Mobile ${socket.id}`);
-  });
-
-  // WebRTC Signaling: Relay offer from Mac to Mobile
-  socket.on('webrtc:offer', (data: { offer: any }) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mac' || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      console.log(`📡 Relaying WebRTC offer from Mac ${socket.id} to Mobile ${device.pairedWith}`);
-      pairedDevice.socket.emit('webrtc:offer', data);
-    }
-  });
-
-  // WebRTC Signaling: Relay answer from Mobile to Mac
-  socket.on('webrtc:answer', (data: { answer: any }) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      console.log(`📡 Relaying WebRTC answer from Mobile ${socket.id} to Mac ${device.pairedWith}`);
-      pairedDevice.socket.emit('webrtc:answer', data);
+    // If authenticated, try to find a peer
+    if (userId) {
+      findAndPairDevice(device);
+    } else {
+      // Not authenticated - prompt for login
+      socket.emit('login_required', {
+        message: 'Authentication required',
+        loginUrl: `/auth/google?deviceId=${deviceId}&type=${type}`
+      });
     }
   });
 
-  // WebRTC Signaling: Relay ICE candidates
-  socket.on('webrtc:ice-candidate', (data: { candidate: any }) => {
-    const device = devices.get(socket.id);
-    if (!device || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      console.log(`🧊 Relaying ICE candidate from ${device.type} ${socket.id} to ${pairedDevice.type} ${device.pairedWith}`);
-      pairedDevice.socket.emit('webrtc:ice-candidate', data);
+  // --- Helper to route messages ---
+  const routeMessage = (eventName: string, data: any) => {
+    const device = devicesBySocket.get(socket.id);
+    if (device?.pairedWith) {
+      const peer = devicesById.get(device.pairedWith);
+      if (peer) {
+        peer.socket.emit(eventName, data);
+      } else {
+        // Peer lost?
+        device.pairedWith = undefined;
+      }
     }
-  });
+  };
 
-  // Fallback: Keep relay for backward compatibility during transition
-  // These will be used only if WebRTC fails
-  socket.on('terminal:output', (data: string) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mac' || !device.pairedWith) return;
+  // --- WebRTC Signaling ---
+  socket.on('webrtc:offer', (data) => routeMessage('webrtc:offer', data));
+  socket.on('webrtc:answer', (data) => routeMessage('webrtc:answer', data));
+  socket.on('webrtc:ice-candidate', (data) => routeMessage('webrtc:ice-candidate', data));
 
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      pairedDevice.socket.emit('terminal:output', data);
-    }
-  });
-
-  socket.on('terminal:input', (data: string) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      pairedDevice.socket.emit('terminal:input', data);
-    }
-  });
-
-  socket.on('terminal:resize', ({ cols, rows }: { cols: number; rows: number }) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      pairedDevice.socket.emit('terminal:resize', { cols, rows });
-    }
-  });
-
-  socket.on('terminal:dimensions', ({ cols, rows }: { cols: number; rows: number }) => {
-    const device = devices.get(socket.id);
-    if (!device || device.type !== 'mobile' || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      pairedDevice.socket.emit('terminal:dimensions', { cols, rows });
-    }
-  });
-
-  socket.on('system:message', (data: { type: string; payload?: unknown }) => {
-    const device = devices.get(socket.id);
-    if (!device || !device.pairedWith) return;
-
-    const pairedDevice = devices.get(device.pairedWith);
-    if (pairedDevice) {
-      pairedDevice.socket.emit('system:message', data);
-    }
-  });
+  // --- Terminal IO ---
+  socket.on('terminal:input', (data) => routeMessage('terminal:input', data));
+  socket.on('terminal:output', (data) => routeMessage('terminal:output', data));
+  socket.on('terminal:resize', (data) => routeMessage('terminal:resize', data));
+  socket.on('terminal:dimensions', (data) => routeMessage('terminal:dimensions', data));
+  socket.on('system:message', (data) => routeMessage('system:message', data));
 
   // Handle disconnect
   socket.on('disconnect', () => {
-    const device = devices.get(socket.id);
-
+    const device = devicesBySocket.get(socket.id);
     if (device) {
       console.log(`❌ ${device.type} device disconnected:`, socket.id);
-
-      // Notify paired device
+      
       if (device.pairedWith) {
-        const pairedDevice = devices.get(device.pairedWith);
-        if (pairedDevice) {
-          pairedDevice.socket.emit('paired_device_disconnected', {
-            message: `Paired ${device.type} device disconnected`
+        const peer = devicesById.get(device.pairedWith);
+        if (peer) {
+          peer.socket.emit('paired_device_disconnected', {
+            message: `${device.type} disconnected`
           });
-          // Clear pairing
-          pairedDevice.pairedWith = undefined;
-          devices.set(device.pairedWith, pairedDevice);
+          peer.pairedWith = undefined;
+          // Re-enter waiting state
+          if (peer.userId) {
+            findAndPairDevice(peer);
+          }
         }
       }
-
-      // Remove pairing code if exists
-      if (device.pairingCode) {
-        pairingCodes.delete(device.pairingCode);
-      }
-
-      devices.delete(socket.id);
+      
+      devicesBySocket.delete(socket.id);
+      // Don't delete from devicesById immediately to allow reconnect? 
+      // Actually for this simple implementation, let's delete it to avoid stale sockets
+      // But if we want re-auth persistence we might want to keep it.
+      // For now, let's assume reconnect creates a NEW socket but uses SAME deviceId.
+      // We update the socket reference in `register`.
     }
   });
 });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const HOST = '0.0.0.0'; // Listen on all network interfaces
+const HOST = '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
-  console.log('🌐 MobiFai Relay Server');
+  console.log('🌐 MobiFai Relay Server (Google Auth Enabled)');
   console.log(`📡 Running on port ${PORT}`);
-  console.log(`🔗 Devices can connect to:`);
-  console.log(`   - Local: http://localhost:${PORT}`);
-  console.log(`   - Network: http://192.168.178.72:${PORT}`);
+  console.log(`🔗 Auth Callback URL: http://192.168.178.72:${PORT}/auth/google/callback`);
   console.log('');
-  console.log('Waiting for devices to connect...');
 });

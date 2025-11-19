@@ -6,54 +6,146 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Alert,
   Platform,
+  Alert,
+  Linking,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL, DEBUG } from '../config';
+import { RELAY_SERVER_URL as DEFAULT_RELAY_SERVER_URL } from '../config';
+import { io, Socket } from 'socket.io-client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Simple UUID-like generator for device ID
+const generateDeviceId = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
 
 type ConnectScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Connect'>;
 };
 
+const TOKEN_KEY = 'mobifai_auth_token';
+const DEVICE_ID_KEY = 'mobifai_device_id';
+
 export default function ConnectScreen({ navigation }: ConnectScreenProps) {
-  // Always start with the default from config (not cached value)
   const [relayServerUrl, setRelayServerUrl] = useState(DEFAULT_RELAY_SERVER_URL);
-  const [pairingCode, setPairingCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const socketRef = React.useRef<Socket | null>(null);
 
   useEffect(() => {
-    if (DEBUG) {
-      console.log('🔥 DEBUG mode enabled: Auto-connecting with pairing code 0000');
-      setPairingCode('0000');
-      setTimeout(() => {
-        navigation.navigate('Terminal', {
-          relayServerUrl: DEFAULT_RELAY_SERVER_URL,
-          pairingCode: '0000',
-        });
-      }, 300);
-    }
+    return () => {
+      // Cleanup socket on unmount
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
   }, []);
 
-  const handleConnect = async () => {
-    if (!relayServerUrl || !pairingCode) {
-      Alert.alert('Error', 'Please enter both relay server URL and pairing code');
-      return;
+  const getDeviceId = async () => {
+    let deviceId = await AsyncStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+      deviceId = generateDeviceId();
+      await AsyncStorage.setItem(DEVICE_ID_KEY, deviceId);
     }
+    return deviceId;
+  };
 
+  const handleConnect = async () => {
     setLoading(true);
+    setStatusMessage('Connecting to relay server...');
 
     try {
-      // Navigate to terminal with pairing code
-      navigation.navigate('Terminal', {
-        relayServerUrl,
-        pairingCode,
+      const token = await AsyncStorage.getItem(TOKEN_KEY);
+      const deviceId = await getDeviceId();
+
+      const socket = io(relayServerUrl, {
+        reconnection: false, // Don't auto-reconnect on this screen
       });
+
+      socketRef.current = socket;
+
+      socket.on('connect', () => {
+        setStatusMessage('Connected. Checking authentication...');
+        socket.emit('register', { type: 'mobile', token, deviceId });
+      });
+
+      socket.on('login_required', ({ loginUrl }) => {
+        setStatusMessage('Authentication required');
+        Alert.alert(
+          'Login Required',
+          'You need to sign in with Google to continue.',
+          [
+            {
+              text: 'Sign In',
+              onPress: () => {
+                const fullUrl = `${relayServerUrl}${loginUrl}`;
+                Linking.openURL(fullUrl);
+                setStatusMessage('Waiting for authentication...\nComplete login in browser and return here.');
+              }
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => {
+                socket.disconnect();
+                setLoading(false);
+                setStatusMessage('');
+              }
+            }
+          ]
+        );
+      });
+
+      socket.on('authenticated', async ({ token, user }) => {
+        console.log(`✅ Authenticated as ${user.email}`);
+        await AsyncStorage.setItem(TOKEN_KEY, token);
+        setStatusMessage(`Authenticated as ${user.email}`);
+        
+        // Re-register with token
+        socket.emit('register', { type: 'mobile', token, deviceId });
+      });
+
+      socket.on('waiting_for_peer', ({ message }) => {
+        setStatusMessage(message);
+      });
+
+      socket.on('paired', ({ message }) => {
+        setStatusMessage('Connected! Opening terminal...');
+        // Disconnect this socket (TerminalScreen will create its own)
+        socket.disconnect();
+        
+        // Navigate to terminal
+        setTimeout(() => {
+          navigation.navigate('Terminal', { relayServerUrl });
+        }, 500);
+      });
+
+      socket.on('auth_error', async ({ message }) => {
+        await AsyncStorage.removeItem(TOKEN_KEY);
+        Alert.alert('Authentication Error', message);
+        socket.emit('register', { type: 'mobile', deviceId });
+      });
+
+      socket.on('connect_error', (error) => {
+        setStatusMessage('');
+        setLoading(false);
+        Alert.alert('Connection Error', `Failed to connect:\n${error.message}`);
+      });
+
+      socket.on('error', ({ message }) => {
+        Alert.alert('Error', message);
+      });
+
     } catch (error: any) {
-      Alert.alert('Error', error.message);
-    } finally {
       setLoading(false);
+      setStatusMessage('');
+      Alert.alert('Error', error.message);
     }
   };
 
@@ -73,17 +165,7 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
-        />
-
-        <Text style={styles.label}>Pairing Code (from Mac)</Text>
-        <TextInput
-          style={styles.input}
-          value={pairingCode}
-          onChangeText={setPairingCode}
-          placeholder="Enter 6-digit code"
-          placeholderTextColor="#666"
-          keyboardType="number-pad"
-          maxLength={6}
+          editable={!loading}
         />
 
         <TouchableOpacity
@@ -94,17 +176,17 @@ export default function ConnectScreen({ navigation }: ConnectScreenProps) {
           {loading ? (
             <ActivityIndicator color="#000" />
           ) : (
-            <Text style={styles.buttonText}>Connect</Text>
+            <Text style={styles.buttonText}>Connect with Google</Text>
           )}
         </TouchableOpacity>
 
-        <Text style={styles.hint}>
-          How to connect:{'\n\n'}
-          1. Start the Mac client on your Mac{'\n'}
-          2. Copy the 6-digit pairing code{'\n'}
-          3. Enter relay server URL and code above{'\n'}
-          4. Tap Connect
-        </Text>
+        {statusMessage ? (
+          <Text style={styles.status}>{statusMessage}</Text>
+        ) : (
+          <Text style={styles.hint}>
+            Sign in with the same Google account on both Mac and mobile to connect securely.
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -166,6 +248,14 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 16,
     fontWeight: 'bold',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  status: {
+    marginTop: 20,
+    fontSize: 13,
+    color: '#0f0',
+    textAlign: 'center',
+    lineHeight: 20,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   hint: {

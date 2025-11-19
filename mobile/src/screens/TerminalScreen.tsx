@@ -7,6 +7,7 @@ import {
   Alert,
   TouchableOpacity,
   KeyboardAvoidingView,
+  Linking,
 } from "react-native";
 import { WebView } from "react-native-webview";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -14,17 +15,30 @@ import { RouteProp } from "@react-navigation/native";
 import { RootStackParamList } from "../../App";
 import { io, Socket } from "socket.io-client";
 import { WebRTCService } from "../services/WebRTCService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+// Simple UUID-like generator for device ID
+const generateDeviceId = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
 
 type TerminalScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, "Terminal">;
   route: RouteProp<RootStackParamList, "Terminal">;
 };
 
+const TOKEN_KEY = 'mobifai_auth_token';
+const DEVICE_ID_KEY = 'mobifai_device_id';
+
 export default function TerminalScreen({
   navigation,
   route,
 }: TerminalScreenProps) {
-  const { relayServerUrl, pairingCode } = route.params;
+  const { relayServerUrl } = route.params;
   const [connected, setConnected] = useState(false);
   const [paired, setPaired] = useState(false);
   const [terminalReady, setTerminalReady] = useState(false);
@@ -57,10 +71,8 @@ export default function TerminalScreen({
   };
 
   const handleRefreshDimensions = () => {
-    // Trigger fit in terminal
     sendToTerminal("fit", {});
-
-    // Send current dimensions to Mac if we have them
+    
     if (terminalDimensionsRef.current && paired && socketRef.current) {
       console.log(
         "📐 Manually refreshing dimensions:",
@@ -74,8 +86,22 @@ export default function TerminalScreen({
     }
   };
 
-  const connectToRelay = () => {
+  const getDeviceId = async () => {
+    let deviceId = await AsyncStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+      deviceId = generateDeviceId();
+      await AsyncStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+  };
+
+  const connectToRelay = async () => {
     setConnectionStatus("📡 Connecting to relay server...");
+
+    const token = await AsyncStorage.getItem(TOKEN_KEY);
+    const deviceId = await getDeviceId();
+
+    console.log(`Device ID: ${deviceId}`);
 
     const socket = io(relayServerUrl, {
       reconnection: true,
@@ -89,23 +115,50 @@ export default function TerminalScreen({
     socket.on("connect", () => {
       setConnected(true);
       setConnectionStatus("✅ Connected to relay server");
-      // Register as mobile device
-      socket.emit("register", { type: "mobile" });
+      // Register as mobile device with token and deviceId
+      socket.emit("register", { type: "mobile", token, deviceId });
     });
 
-    socket.on("registered", ({ message }) => {
-      setConnectionStatus(
-        `✅ ${message}\n🔗 Pairing with code: ${pairingCode}...`
+    socket.on("login_required", ({ loginUrl }) => {
+      setConnectionStatus("🔒 Authentication Required\nPlease log in via browser");
+      Alert.alert(
+        "Authentication Required",
+        "You need to log in with Google to connect.",
+        [
+          {
+            text: "Log In",
+            onPress: () => {
+               const fullUrl = `${relayServerUrl}${loginUrl}`;
+               Linking.openURL(fullUrl);
+            }
+          },
+          {
+            text: "Cancel",
+            style: "cancel",
+            onPress: () => navigation.goBack()
+          }
+        ]
       );
+    });
 
-      // Send pairing code with terminal dimensions (if available)
-      const dims = terminalDimensionsRef.current;
-      if (dims) {
-        socket.emit("pair", { pairingCode, cols: dims.cols, rows: dims.rows });
-      } else {
-        // Pair without dimensions initially, will send later
-        socket.emit("pair", { pairingCode });
-      }
+    socket.on("authenticated", async ({ token, user }) => {
+      console.log(`✅ Authenticated as ${user.email}`);
+      await AsyncStorage.setItem(TOKEN_KEY, token);
+      setConnectionStatus(`✅ Logged in as ${user.email}`);
+      
+      // Re-register with new token
+      socket.emit("register", { type: "mobile", token, deviceId });
+    });
+
+    socket.on("auth_error", async ({ message }) => {
+      console.log(`❌ Auth Error: ${message}`);
+      await AsyncStorage.removeItem(TOKEN_KEY);
+      // Will trigger login_required on next attempt
+      socket.emit("register", { type: "mobile", deviceId });
+    });
+
+    socket.on("waiting_for_peer", ({ message }) => {
+      setConnectionStatus(`⏳ ${message}`);
     });
 
     socket.on("paired", ({ message }) => {
@@ -120,7 +173,6 @@ export default function TerminalScreen({
       // Handle WebRTC messages
       webrtcRef.current.onMessage((data) => {
         if (data.type === "terminal:output") {
-          // Send terminal output to xterm.js
           sendToTerminal("output", data.payload);
         }
       });
@@ -142,25 +194,21 @@ export default function TerminalScreen({
     });
 
     socket.on("system:message", (data: { type: string; payload?: unknown }) => {
-      console.log("📨 System message received:", JSON.stringify(data));
-
       if (data.type === "terminal_ready") {
         console.log("✅ Terminal ready on Mac side");
         setTerminalReady(true);
-        setConnectionStatus(""); // Clear connection messages, show terminal
+        setConnectionStatus(""); 
       }
     });
 
     // Listen for terminal output via WebSocket (fallback)
     socket.on("terminal:output", (data: string) => {
-      // Only process via WebSocket if WebRTC is not connected
       if (!webrtcRef.current?.isWebRTCConnected()) {
         sendToTerminal("output", data);
       }
     });
 
     socket.on("paired_device_disconnected", ({ message }) => {
-      // If WebRTC P2P is connected, ignore Socket.IO disconnection
       if (webrtcRef.current?.isWebRTCConnected()) {
         console.log(
           "⚠️  Relay server disconnected, but P2P connection is still active"
@@ -183,7 +231,6 @@ export default function TerminalScreen({
     });
 
     socket.on("disconnect", (reason) => {
-      // If WebRTC P2P is connected, keep session active
       if (webrtcRef.current?.isWebRTCConnected()) {
         console.log(
           "⚠️  Relay server disconnected, but P2P connection is still active"
@@ -234,18 +281,15 @@ export default function TerminalScreen({
         console.log("📱 Terminal WebView ready:", message.data);
         terminalDimensionsRef.current = message.data;
 
-        // If already paired, send dimensions to Mac
         if (paired && socketRef.current) {
           console.log("📤 Sending terminal dimensions:", message.data);
           socketRef.current.emit("terminal:dimensions", message.data);
         }
 
-        // Show connection status in terminal if not ready
         if (!terminalReady) {
           sendToTerminal("output", connectionStatus + "\r\n");
         }
       } else if (message.type === "input") {
-        // Send input to Mac via WebRTC or WebSocket
         if (paired) {
           const input = message.data;
           if (webrtcRef.current?.isWebRTCConnected()) {
@@ -261,16 +305,11 @@ export default function TerminalScreen({
           }
         }
       } else if (message.type === "dimensions") {
-        console.log("📐 Terminal dimensions changed:", message.data);
         terminalDimensionsRef.current = message.data;
-
-        // Send updated dimensions to Mac
         if (paired && socketRef.current) {
           socketRef.current.emit("terminal:dimensions", message.data);
         }
       } else if (message.type === "resize") {
-        console.log("📐 Terminal resized:", message.data);
-        // Send resize event to Mac
         if (paired && socketRef.current) {
           socketRef.current.emit("terminal:resize", message.data);
         }
@@ -280,13 +319,13 @@ export default function TerminalScreen({
     }
   };
 
-  // Update connection status in terminal when it changes
   useEffect(() => {
     if (!terminalReady && connectionStatus) {
       sendToTerminal("output", connectionStatus + "\r\n");
     }
   }, [connectionStatus, terminalReady]);
 
+  // ... (keep existing terminalHtml) ...
   const terminalHtml = `
 <!DOCTYPE html>
 <html>
