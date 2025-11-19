@@ -565,7 +565,8 @@ const styles = StyleSheet.create({
     color: "#000",
     fontSize: 16,
     fontWeight: "bold",
-    lineHeight: 16,
+    textAlign: "center",
+    lineHeight: 22,
   },
   fitButton: {
     backgroundColor: "#0f0",
@@ -581,6 +582,8 @@ const styles = StyleSheet.create({
     color: "#000",
     fontSize: 15,
     fontWeight: "bold",
+    textAlign: "center",
+    lineHeight: 22,
   },
   webview: {
     flex: 1,
