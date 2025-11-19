@@ -14,6 +14,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
 import { io, Socket } from 'socket.io-client';
 import { WebRTCService } from '../services/WebRTCService';
+import Icon from 'react-native-vector-icons/FontAwesome';
 
 type TerminalScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Terminal'>;
@@ -443,13 +444,13 @@ export default function TerminalScreen({ navigation, route }: TerminalScreenProp
           style={styles.refreshButton}
           onPress={handleRefreshDimensions}
         >
-          <Text style={styles.refreshButtonText}>↻</Text>
+          <Icon name="refresh" size={12} color="#000" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.fitButton}
           onPress={() => sendToTerminal('fit', {})}
         >
-          <Text style={styles.fitButtonText}>⊡</Text>
+          <Icon name="expand" size={12} color="#000" />
         </TouchableOpacity>
       </View>
 
@@ -513,30 +514,20 @@ const styles = StyleSheet.create({
   refreshButton: {
     backgroundColor: '#0f0',
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 3,
     marginLeft: 6,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  refreshButtonText: {
-    color: '#000',
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   fitButton: {
     backgroundColor: '#0f0',
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 3,
     marginLeft: 6,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  fitButtonText: {
-    color: '#000',
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   webview: {
     flex: 1,
